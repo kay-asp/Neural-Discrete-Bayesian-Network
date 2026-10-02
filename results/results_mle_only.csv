@@ -1,4 +1,4 @@
-dag_idx,n_nodes,in_degree,alpha,sample_size,kl,density,fit_time_s,fit_rss_delta_bytes,total_stored_params,total_memory_bytes
+dag_idx,n_nodes,in_degree,alpha,sample_size,kl,density,fit_time_s,fit_rss_delta_bytes,stored_params,memory_bytes
 1,5,2,0.1,600,0.024816534107215186,0.7,0.02701604400135693,167936,30,240
 1,5,2,0.1,1000,0.02048468942885056,0.7,0.028648605999478605,0,30,240
 1,5,2,0.1,1400,0.019807320640360063,0.7,0.026051341999846045,12288,30,240
