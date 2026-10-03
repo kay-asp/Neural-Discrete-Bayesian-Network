@@ -1,0 +1,20 @@
+{"time":"2026-10-03T01:08:59.1184376+02:00","level":"INFO","msg":"wandb-core"}
+{"time":"2026-10-03T01:08:59.1184376+02:00","level":"INFO","msg":"stream: starting","core version":"0.30.0"}
+{"time":"2026-10-03T01:08:59.1220426+02:00","level":"INFO","msg":"stream: created new stream","id":"nax7lqp6"}
+{"time":"2026-10-03T01:08:59.1220426+02:00","level":"INFO","msg":"handler: started"}
+{"time":"2026-10-03T01:08:59.1230649+02:00","level":"INFO","msg":"stream: started"}
+{"time":"2026-10-03T01:08:59.1230649+02:00","level":"INFO","msg":"sender: started"}
+{"time":"2026-10-03T01:08:59.1230649+02:00","level":"INFO","msg":"writer: started","stream_id":"nax7lqp6"}
+{"time":"2026-10-03T01:09:00.1736524+02:00","level":"INFO","msg":"filestream: sending request","total_files":1,"events_offset":0,"events_lines":1}
+{"time":"2026-10-03T01:09:00.708111+02:00","level":"INFO","msg":"filestream: request sent","status":"200 OK"}
+{"time":"2026-10-03T01:09:15.1736095+02:00","level":"INFO","msg":"filestream: sending request","total_files":3,"history_offset":0,"history_lines":63,"events_offset":1,"events_lines":2,"uploaded_len":2}
+{"time":"2026-10-03T01:09:15.418696+02:00","level":"INFO","msg":"api: retrying HTTP error","status":502,"url":"https://api.wandb.ai/files/kay-asp-wits-university/neural-cpds/nax7lqp6/file_stream","body":"\n<html><head>\n<meta http-equiv=\"content-type\" content=\"text/html;charset=utf-8\">\n<title>502 Server Error</title>\n</head>\n<body text=#000000 bgcolor=#ffffff>\n<h1>Error: Server Error</h1>\n<h2>The server encountered a temporary error and could not complete your request.<p>Please try again in 30 seconds.</h2>\n<h2></h2>\n</body></html>\n"}
+{"time":"2026-10-03T01:09:18.6155004+02:00","level":"INFO","msg":"filestream: request sent","status":"200 OK"}
+{"time":"2026-10-03T01:09:19.0172287+02:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2026-10-03T01:09:19.0183505+02:00","level":"INFO","msg":"filestream: sending request","total_files":3,"history_offset":63,"history_lines":78,"events_offset":3,"events_lines":1,"uploaded_len":2,"complete":true,"exit_code":0}
+{"time":"2026-10-03T01:09:19.452968+02:00","level":"INFO","msg":"filestream: request sent","status":"200 OK"}
+{"time":"2026-10-03T01:09:19.4580435+02:00","level":"INFO","msg":"handler: operation stats","stats":{}}
+{"time":"2026-10-03T01:09:19.466604+02:00","level":"INFO","msg":"stream: finishing up"}
+{"time":"2026-10-03T01:09:19.466604+02:00","level":"INFO","msg":"handler: closed"}
+{"time":"2026-10-03T01:09:19.466604+02:00","level":"INFO","msg":"sender: closed"}
+{"time":"2026-10-03T01:09:19.466604+02:00","level":"INFO","msg":"stream: all finished"}

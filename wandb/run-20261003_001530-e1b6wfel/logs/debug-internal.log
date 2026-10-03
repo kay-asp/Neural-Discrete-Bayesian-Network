@@ -1,0 +1,18 @@
+{"time":"2026-10-03T00:15:30.8232702+02:00","level":"INFO","msg":"wandb-core"}
+{"time":"2026-10-03T00:15:30.8237865+02:00","level":"INFO","msg":"stream: starting","core version":"0.30.0"}
+{"time":"2026-10-03T00:15:30.8307536+02:00","level":"INFO","msg":"stream: created new stream","id":"e1b6wfel"}
+{"time":"2026-10-03T00:15:30.8307536+02:00","level":"INFO","msg":"handler: started"}
+{"time":"2026-10-03T00:15:30.8323659+02:00","level":"INFO","msg":"stream: started"}
+{"time":"2026-10-03T00:15:30.8323659+02:00","level":"INFO","msg":"writer: started","stream_id":"e1b6wfel"}
+{"time":"2026-10-03T00:15:30.8323659+02:00","level":"INFO","msg":"sender: started"}
+{"time":"2026-10-03T00:15:32.0109758+02:00","level":"INFO","msg":"filestream: sending request","total_files":1,"events_offset":0,"events_lines":1}
+{"time":"2026-10-03T00:15:32.5751835+02:00","level":"INFO","msg":"filestream: request sent","status":"200 OK"}
+{"time":"2026-10-03T00:15:40.5595817+02:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2026-10-03T00:15:40.5595817+02:00","level":"INFO","msg":"filestream: sending request","total_files":3,"history_offset":0,"history_lines":149,"events_offset":1,"events_lines":1,"uploaded_len":4,"complete":true,"exit_code":0}
+{"time":"2026-10-03T00:15:40.8065144+02:00","level":"INFO","msg":"api: retrying HTTP error","status":502,"url":"https://api.wandb.ai/files/kay-asp-wits-university/neural-cpds/e1b6wfel/file_stream","body":"\n<html><head>\n<meta http-equiv=\"content-type\" content=\"text/html;charset=utf-8\">\n<title>502 Server Error</title>\n</head>\n<body text=#000000 bgcolor=#ffffff>\n<h1>Error: Server Error</h1>\n<h2>The server encountered a temporary error and could not complete your request.<p>Please try again in 30 seconds.</h2>\n<h2></h2>\n</body></html>\n"}
+{"time":"2026-10-03T00:15:43.7209628+02:00","level":"INFO","msg":"filestream: request sent","status":"200 OK"}
+{"time":"2026-10-03T00:15:43.7239626+02:00","level":"INFO","msg":"handler: operation stats","stats":{}}
+{"time":"2026-10-03T00:15:43.730176+02:00","level":"INFO","msg":"stream: finishing up"}
+{"time":"2026-10-03T00:15:43.730176+02:00","level":"INFO","msg":"handler: closed"}
+{"time":"2026-10-03T00:15:43.730176+02:00","level":"INFO","msg":"sender: closed"}
+{"time":"2026-10-03T00:15:43.730176+02:00","level":"INFO","msg":"stream: all finished"}
