@@ -274,8 +274,8 @@ def run_sweep(arms, k_values, n_dags, n_nodes, alpha, sample_sizes,
                             stop=np.array([model.stop_epoch_[v] for v in order]),
                         )
 
-                    # selection metric: mean per-node best validation cross-entropy
-                    summary = {"val_loss": float(np.mean(list(model.best_val_.values()))),
+                    # selection metric: best validation cross-entropy summed over all nodes
+                    summary = {"val_loss": float(np.sum(list(model.best_val_.values()))),
                                "fit_time_s": t,
                                "stored_params": stats["stored_params"],
                                "memory_bytes": stats["memory_bytes"],
