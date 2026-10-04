@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p /tmp/claude-1000/-home-kaylin-Neural-Discrete-Bayesian-Network/eaaeb93a-90ce-464f-abb9-75b3923a3155/scratchpad)",
+      "Bash(.venv/bin/python /tmp/claude-1000/-home-kaylin-Neural-Discrete-Bayesian-Network/eaaeb93a-90ce-464f-abb9-75b3923a3155/scratchpad/check.py)",
+      "Bash(.venv/bin/python -c ' *)",
+      "Bash(.venv/bin/python /tmp/claude-1000/-home-kaylin-Neural-Discrete-Bayesian-Network/eaaeb93a-90ce-464f-abb9-75b3923a3155/scratchpad/edit_seeds.py)"
+    ]
+  }
+}
