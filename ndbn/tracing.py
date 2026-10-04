@@ -26,38 +26,26 @@ class Trace:
         return (self.kl_every > 0 and self.true_model is not None
                 and self.test_data is not None)
 
-    def log_epoch(self, epoch, nodes, k_of, val_loss, train_loss, best_val_loss,
-                  models, parents, card):
-        """One epoch of W&B diagnostics. Safe to call unguarded."""
+    def log_epoch(self, epoch, nodes, val_loss, train_loss,
+                  best_val_loss, best_train_loss, stopped, models, parents, card):
+        """One epoch of W&B diagnostics. Safe to call unguarded.
+
+        Losses are summed over all nodes: the joint negative log-likelihood of
+        a sample under the whole network. A stopped node has its best-epoch
+        weights restored, so it contributes its best-epoch losses.
+        """
         if not self.logging or not val_loss:
             return
 
-        alive = list(val_loss)
+        val = [best_val_loss[n] if stopped[n] else val_loss[n] for n in nodes]
+        train = [best_train_loss[n] if stopped[n] else train_loss[n] for n in nodes]
         rec = {
-            "epoch":            epoch + 1,
-            "n_alive":          len(alive),
-            "val_loss":    float(np.mean([val_loss[n] for n in alive])),
-            "train_loss":  float(np.mean([train_loss[n] for n in alive])),
-            # frozen cohort: every node at its best-so-far, so the mean is not
-            # dragged around by easy nodes dropping out of the alive set
-            "val_loss_best": float(np.mean([best_val_loss[n] for n in nodes
-                                               if np.isfinite(best_val_loss[n])])),
+            "epoch":      epoch + 1,
+            "n_alive":    len(val_loss),
+            "val_loss":   float(np.sum(val)),
+            "train_loss": float(np.sum(train)),
         }
-        rec["gap_alive"] = rec["val_loss"] - rec["train_loss"]
-
-        for b in sorted(set(k_of.values())):
-            live_b = [n for n in alive if k_of[n] == b]
-            if live_b:
-                v = float(np.mean([val_loss[n] for n in live_b]))
-                t = float(np.mean([train_loss[n] for n in live_b]))
-                rec[f"val_loss_k{b}"] = v
-                rec[f"train_loss_k{b}"] = t
-                rec[f"gap_k{b}"] = v - t
-                rec[f"n_alive_k{b}"] = len(live_b)
-            finite_b = [best_val_loss[n] for n in nodes
-                        if k_of[n] == b and np.isfinite(best_val_loss[n])]
-            if finite_b:
-                rec[f"val_loss_best_k{b}"] = float(np.mean(finite_b))
+        rec["gap"] = rec["val_loss"] - rec["train_loss"]
 
         if self.tracking_kl and (epoch + 1) % self.kl_every == 0:
             snap = NeuralCPDs(models=models, parents=parents, card=card)

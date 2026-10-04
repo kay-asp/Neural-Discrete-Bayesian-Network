@@ -54,7 +54,6 @@ def train_nn_cpds(G, df_train, df_val, card,
 
     # Diagnostics state — inert when trace is None
     trace = trace or Trace()
-    k_of = {node: len(parents[node]) for node in nodes}
     hist_train_loss = {node: [] for node in nodes} if trace.history else None
     hist_val_loss   = {node: [] for node in nodes} if trace.history else None
 
@@ -112,8 +111,9 @@ def train_nn_cpds(G, df_train, df_val, card,
                               f"Best val loss={best_val_loss[node]:.4f}")
 
         if trace.logging and val_loss:
-            trace.log_epoch(epoch, nodes, k_of, val_loss, train_loss,
-                            best_val_loss, models, parents, card)
+            trace.log_epoch(epoch, nodes, val_loss, train_loss,
+                            best_val_loss, best_train_loss, stopped,
+                            models, parents, card)
 
         if verbose and (epoch + 1) % 50 == 0 and val_loss:
             tr = f"train {np.mean(list(train_loss.values())):.4f}, " if train_loss else ""
