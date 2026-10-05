@@ -1,1 +1,0 @@
-{"fit_time_s":15.265928199998598,"_wandb":{"runtime":15},"gap":0.3438945868983865,"stop_epoch_mean":60.45,"stored_params":195752,"epoch":196,"val_loss":7.947255104780197,"_runtime":15.3581649,"_timestamp":1.7911553152707927e+09,"_step":196,"train_loss":7.603360517881811,"memory_bytes":1566016,"n_alive":1,"frac_at_ceiling":0}

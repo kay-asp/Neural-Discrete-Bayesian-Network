@@ -1,1 +1,0 @@
-{"stop_epoch_mean":36.4,"_step":62,"train_loss":9.00112597644329,"frac_at_ceiling":0,"_runtime":19.5067864,"_timestamp":1.7911509319693363e+09,"epoch":62,"fit_time_s":19.37383509999927,"memory_bytes":1439040,"_wandb":{"runtime":19},"gap":-0.056197360157966614,"n_alive":1,"val_loss":8.944928616285324,"stored_params":179880}

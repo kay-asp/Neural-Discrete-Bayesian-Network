@@ -1,0 +1,6 @@
+# Python bytecode (rebuilt automatically)
+__pycache__/
+*.pyc
+
+# W&B local run logs (everything is on the W&B server)
+wandb/
