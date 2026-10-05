@@ -1,0 +1,31 @@
+2026-10-05 14:51:56,087 INFO    Thread-472 (_run_job):12212 [wandb_setup.py:_flush():81] Current SDK version is 0.30.0
+2026-10-05 14:51:56,087 INFO    Thread-472 (_run_job):12212 [wandb_setup.py:_flush():81] Configure stats pid to 12212
+2026-10-05 14:51:56,087 INFO    Thread-472 (_run_job):12212 [wandb_setup.py:_flush():81] Loading settings from environment variables
+2026-10-05 14:51:56,087 INFO    Thread-472 (_run_job):12212 [wandb_init.py:setup_run_log_directory():739] Logging user logs to c:\Users\Kaylin\Documents\Neural-Discrete-Bayesian-Network\wandb\run-20261005_145156-ts6sf8o2\logs\debug.log
+2026-10-05 14:51:56,087 INFO    Thread-472 (_run_job):12212 [wandb_init.py:setup_run_log_directory():740] Logging internal logs to c:\Users\Kaylin\Documents\Neural-Discrete-Bayesian-Network\wandb\run-20261005_145156-ts6sf8o2\logs\debug-internal.log
+2026-10-05 14:51:56,087 INFO    Thread-472 (_run_job):12212 [wandb_init.py:monkeypatch_ipython():658] configuring jupyter hooks <wandb.sdk.wandb_init._WandbInit object at 0x0000028581D2A4E0>
+2026-10-05 14:51:56,087 INFO    Thread-472 (_run_job):12212 [wandb_init.py:init():783] calling init triggers
+2026-10-05 14:51:56,087 INFO    Thread-472 (_run_job):12212 [wandb_init.py:init():788] wandb.init called with sweep_config: {'batch_size': 32, 'dropout': 0.5, 'hidden_dims': '128_64', 'lr': 0.00042578508195631584, 'n_epochs': 1000, 'optimizer': 'adamw', 'patience': 20, 'weight_decay': 0.09530526110478672}
+config: {'_wandb': {}}
+2026-10-05 14:51:56,087 INFO    Thread-472 (_run_job):12212 [wandb_init.py:init():831] starting backend
+2026-10-05 14:51:56,087 INFO    Thread-472 (_run_job):12212 [wandb_init.py:init():846] sending inform_init request
+2026-10-05 14:51:56,096 INFO    Thread-472 (_run_job):12212 [wandb_init.py:init():851] backend started and connected
+2026-10-05 14:51:56,098 INFO    Thread-472 (_run_job):12212 [wandb_run.py:_config_callback():1283] config_cb None None {'batch_size': 32, 'dropout': 0.5, 'hidden_dims': '128_64', 'lr': 0.00042578508195631584, 'n_epochs': 1000, 'optimizer': 'adamw', 'patience': 20, 'weight_decay': 0.09530526110478672}
+2026-10-05 14:51:56,099 INFO    Thread-472 (_run_job):12212 [wandb_run.py:_label_probe_notebook():1213] probe notebook
+2026-10-05 14:51:56,100 INFO    Thread-472 (_run_job):12212 [wandb_run.py:_label_probe_notebook():1223] Unable to probe notebook: 'charmap' codec can't decode byte 0x81 in position 491293: character maps to <undefined>
+2026-10-05 14:51:56,101 INFO    Thread-472 (_run_job):12212 [wandb_init.py:init():921] updated telemetry
+2026-10-05 14:51:56,189 INFO    Thread-472 (_run_job):12212 [wandb_init.py:init():944] communicating run to backend with 90.0 second timeout
+2026-10-05 14:51:57,086 INFO    Thread-472 (_run_job):12212 [wandb_init.py:init():981] starting run threads in backend
+2026-10-05 14:51:57,174 INFO    Thread-472 (_run_job):12212 [wandb_run.py:_console_start():2531] atexit reg
+2026-10-05 14:51:57,174 INFO    Thread-472 (_run_job):12212 [wandb_run.py:_redirect():2381] redirect: wrap_raw
+2026-10-05 14:51:57,174 INFO    Thread-472 (_run_job):12212 [wandb_run.py:_redirect():2450] Wrapping output streams.
+2026-10-05 14:51:57,174 INFO    Thread-472 (_run_job):12212 [wandb_run.py:_redirect():2473] Redirects installed.
+2026-10-05 14:51:57,175 INFO    Thread-472 (_run_job):12212 [wandb_init.py:init():1019] run started, returning control to user process
+2026-10-05 14:53:42,509 INFO    Thread-472 (_run_job):12212 [wandb_run.py:_finish():2303] finishing run kay-asp-wits-university/neural-cpds-hparams/ts6sf8o2
+2026-10-05 14:53:42,510 INFO    Thread-472 (_run_job):12212 [jupyter.py:save_history():441] not saving jupyter history
+2026-10-05 14:53:42,510 INFO    Thread-472 (_run_job):12212 [jupyter.py:save_ipynb():368] not saving jupyter notebook
+2026-10-05 14:53:42,510 INFO    Thread-472 (_run_job):12212 [wandb_init.py:_jupyter_teardown():637] cleaning up jupyter logic
+2026-10-05 14:53:42,510 INFO    Thread-472 (_run_job):12212 [wandb_run.py:_atexit_cleanup():2498] got exitcode: 0
+2026-10-05 14:53:42,510 INFO    Thread-472 (_run_job):12212 [wandb_run.py:_restore():2480] restore
+2026-10-05 14:53:42,510 INFO    Thread-472 (_run_job):12212 [wandb_run.py:_restore():2486] restore done
+2026-10-05 14:53:43,970 INFO    Thread-472 (_run_job):12212 [wandb_run.py:_footer_sync_info():3901] logging synced files
