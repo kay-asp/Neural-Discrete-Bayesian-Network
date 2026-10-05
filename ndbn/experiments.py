@@ -217,6 +217,7 @@ def evaluate(model, true_model, test_data, card, n_epochs):
         kl, se = kl_nn(true_model, model, test_data, card)
         extra = model.param_stats()
         extra["stop_epoch_mean"] = float(np.mean(list(model.stop_epoch_.values())))
+        extra["best_epoch_mean"] = float(np.mean(list(model.best_epoch_.values())))
         extra["frac_at_ceiling"] = float(np.mean(
             [e >= n_epochs for e in model.stop_epoch_.values()]))
     else:
@@ -413,6 +414,7 @@ def _run_sweep_job(job, card, val_frac, wandb_project, hist_dir, results_dir,
                "stored_params": stats["stored_params"],
                "memory_bytes": stats["memory_bytes"],
                "stop_epoch_mean": float(np.mean(stops)),
+               "best_epoch_mean": float(np.mean(list(model.best_epoch_.values()))),
                "frac_at_ceiling": float(np.mean([s >= kw["n_epochs"] for s in stops]))}
     if test_data is not None:
         summary["kl"], summary["kl_se"] = kl_nn(true_model, model, test_data, card)
@@ -508,6 +510,7 @@ def _trial_cell(job, hidden_dims, activation, kw, card, val_frac, results_dir,
         "fit_time_s": t, "fit_cpu_s": cpu_t,
         "stored_params": model.param_stats()["stored_params"],
         "stop_epoch_mean": float(np.mean(stops)),
+        "best_epoch_mean": float(np.mean(list(model.best_epoch_.values()))),
         "frac_at_ceiling": float(np.mean([e >= kw["n_epochs"] for e in stops])),
         "device": _models.DEVICE, "torch_threads": torch.get_num_threads(),
         "torch_version": torch.__version__, "code_version": code_version(),
