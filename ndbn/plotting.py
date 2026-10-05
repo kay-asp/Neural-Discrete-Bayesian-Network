@@ -208,6 +208,21 @@ def _round_sig(x, sig=1):
 _ROUNDED = ("lr", "weight_decay")
 
 
+def _snap(x, mantissas=(1, 5)):
+    """Snap a positive number to the nearest m * 10^e (m in mantissas), in log
+    space: with (1, 5), 0.006 -> 0.005, 0.003 -> 0.005, 0.002 -> 0.001,
+    0.008 -> 0.01. Zero, negatives and non-numbers are returned unchanged."""
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return x
+    if not np.isfinite(x) or x <= 0:
+        return x
+    e0 = int(np.floor(np.log10(x)))
+    candidates = [float(f"{m}e{e}") for e in (e0 - 1, e0, e0 + 1) for m in mantissas]
+    return min(candidates, key=lambda c: abs(np.log10(c) - np.log10(x)))
+
+
 def _for_display(df):
     """Round for printing: 4 decimals, but lr / weight_decay to 1 significant
     figure (4 decimals would turn a weight decay of 2e-5 into 0)."""
@@ -361,40 +376,53 @@ def common_configs(tables, match_on=("hidden_dims", "dropout", "patience", "batc
     return out
 
 
-def top_config_values(tables, show=True):
+def top_config_values(tables, snap=(("weight_decay", (1, 5)),), show=True):
     """Every top config (from summarise_trials) once, with its settings.
 
     lr and weight_decay are rounded to 1 significant figure (0.000302 and
-    0.00031 -> 0.0003; 0.0213 -> 0.02), and configs that become identical
-    after rounding are merged into one row. Columns: run_name / run_id (of the
-    first, best-ranked trial; used to name the arm), in_tables (every
-    in-degree / sample size table any of its trials is top in), n_tables,
-    n_trials (sweep trials merged into the row), then every setting. A row is
-    what's needed to run that config again (see arms_from_configs), with the
-    rounded lr / weight_decay.
+    0.00031 -> 0.0003), except columns listed in snap, which are snapped to a
+    grid instead: snap=(("weight_decay", (1, 5)),) puts weight decay on
+    ..., 1e-4, 5e-4, 1e-3, 5e-3, 1e-2, ... (nearest in log space, so 0.005 and
+    0.006 both become 0.005). snap=() uses plain rounding. Configs that become
+    identical are merged into one row.
+    Columns: run_name / run_id of the merged row's best trial (lowest
+    mean_kl relative to its table's best; used to name the arm), in_tables
+    (every in-degree / sample size table any of its trials is top in),
+    n_tables, n_trials (sweep trials merged into the row), then every
+    setting. A row is what's needed to run that config again (see
+    arms_from_configs), with the rounded / snapped values.
     """
+    grids = dict(snap)
     rows = {}
     for (k, n), top in tables.items():
         cols = [c for c in _HPARAM_COLS if c in top]
+        best_kl = top["mean_kl"].min()
         for _, r in top.iterrows():
-            settings = {c: (_round_sig(r[c]) if c in _ROUNDED else r[c]) for c in cols}
+            settings = {c: (_snap(r[c], grids[c]) if c in grids
+                            else _round_sig(r[c]) if c in _ROUNDED else r[c]) for c in cols}
             key = tuple(str(v) for v in settings.values())
+            regret = r["mean_kl"] / best_kl - 1
             entry = rows.setdefault(key, {"run_id": r["run_id"], "run_name": r["run_name"],
-                                          "tables": [], "trials": set(), **settings})
+                                          "_regret": regret, "tables": [], "trials": set(),
+                                          **settings})
+            if regret < entry["_regret"]:      # label the row with its best trial
+                entry.update(run_id=r["run_id"], run_name=r["run_name"], _regret=regret)
             if f"k{k} N{n}" not in entry["tables"]:
                 entry["tables"].append(f"k{k} N{n}")
             entry["trials"].add(r["run_id"])
     out = pd.DataFrame(list(rows.values()))
     if out.empty:
         return out
+    out = out.drop(columns="_regret")
     out.insert(2, "n_trials", out.pop("trials").map(len))
     out.insert(2, "n_tables", out["tables"].map(len))
     out.insert(2, "in_tables", out.pop("tables").map(", ".join))
     out = (out.sort_values(["n_tables", "n_trials", "run_name"], ascending=[False, False, True])
            .reset_index(drop=True))
     if show:
-        print(f"top configs ({_threshold(tables)}), lr / weight_decay rounded to 1 significant "
-              "figure, identical configs merged:")
+        how = [f"{c} snapped to {'-'.join(map(str, g))} grid" for c, g in grids.items()]
+        how += [f"{c} rounded to 1 significant figure" for c in _ROUNDED if c not in grids]
+        print(f"top configs ({_threshold(tables)}), {'; '.join(how)}, identical configs merged:")
         # optimizer / n_epochs stay in the returned table (arms_from_configs needs them)
         _show(out.drop(columns=[c for c in ["run_id", "optimizer", "n_epochs"] if c in out]))
     return out
