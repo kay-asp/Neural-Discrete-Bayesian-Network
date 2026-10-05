@@ -669,38 +669,3 @@ def arms_from_configs(configs):
                 arm[c] = int(r[c]) if c in ints else r[c]
         arms.append(arm)
     return arms
-
-
-def candidates_code(configs, var="CANDIDATES"):
-    """Rows of settings (e.g. plotting.top_config_values output) as Python code
-    for a list of run_sweep arms, to print, copy into the candidate cell of
-    NN_estimation.ipynb and edit. One dict per line, with a comment saying
-    which tables the config was top in and how many sweep trials it covers.
-    Needs `nn` (torch.nn) in scope where it is pasted, for the activation.
-    """
-    def fmt(v):
-        if v is None:
-            return "None"
-        if isinstance(v, type):                         # activation class
-            return f"nn.{v.__name__}"
-        if isinstance(v, tuple):
-            return repr(tuple(int(x) for x in v))
-        if isinstance(v, (bool, np.bool_)):
-            return repr(bool(v))
-        if isinstance(v, (int, np.integer)):
-            return repr(int(v))
-        if isinstance(v, (float, np.floating)):
-            return repr(float(v))
-        return repr(str(v))
-
-    lines = [f"{var} = ["]
-    for arm, (_, r) in zip(arms_from_configs(configs), configs.iterrows()):
-        body = ", ".join(f"{k!r}: {fmt(v)}" for k, v in arm.items())
-        note = []
-        if "in_tables" in r:
-            note.append(f"top in {r['in_tables']}")
-        if "n_trials" in r:
-            note.append(f"{int(r['n_trials'])} trial{'s' if int(r['n_trials']) != 1 else ''}")
-        lines.append(f"    {{{body}}},{'  # ' + '; '.join(note) if note else ''}")
-    lines.append("]")
-    return "\n".join(lines)
