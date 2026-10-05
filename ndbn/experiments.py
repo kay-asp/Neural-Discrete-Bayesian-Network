@@ -476,14 +476,21 @@ def sweep_trial(k_values, n_dags, n_nodes, alpha, sample_sizes, card, val_frac,
                       from the evaluation DAGs.
     dag_offset as in run_sweep; same DAG indexing, data, splits and seeds, so
     results stay paired with run_sweep at the same offset.
+    Also logged: std_kl (spread across DAGs) and mean_kl_n{N} /
+    mean_val_loss_n{N} per sample size. Per-cell results go only to trial_csv
+    (one row per cell). Runs are named e.g. "k10_128_64_3" (k, hidden_dims,
+    W&B trial number).
     n_jobs, device, torch_threads : speed settings, see _parallel_map. The
     cells are fitted in parallel; all W&B logging stays in this process.
-    Appends one row per cell to `trial_csv`.
     """
     import wandb
 
     run = wandb.init()
     config = dict(run.config)
+    # short display name, e.g. "k10_128_64_3"; the number is W&B's trial number
+    # (its auto name ends in it: "genial-sweep-3"). Settings are in the config.
+    trial_no = run.name.rsplit("-", 1)[-1] if run.name else run.id
+    run.name = f"k{'_'.join(map(str, k_values))}_{config['hidden_dims']}_{trial_no}"
     hidden_dims = parse_hidden_dims(config["hidden_dims"])
     activation = nn.ReLU if hidden_dims else None
     kw = {x: config[x] for x in NN_HPARAMS if x in config}
@@ -502,16 +509,21 @@ def sweep_trial(k_values, n_dags, n_nodes, alpha, sample_sizes, card, val_frac,
     rows = list(_parallel_map(run_cell, jobs, n_jobs, device, torch_threads))
     rows.sort(key=lambda r: (r["in_degree"], r["dag_idx"], r["sample_size"]))
 
-    metrics = {}
     for r in rows:
-        r["run_id"] = run.id
-        r["n_jobs"] = n_jobs
-        cell = f"k{r['in_degree']}_d{r['dag_idx']}_n{r['sample_size']}"
-        metrics[f"val_loss/{cell}"] = r["val_loss"]
-        metrics[f"kl/{cell}"] = r["kl"]
-    metrics["mean_val_loss"] = float(np.mean([r["val_loss"] for r in rows]))
-    metrics["mean_kl"] = float(np.mean([r["kl"] for r in rows]))
-    metrics["frac_at_ceiling"] = float(np.mean([r["frac_at_ceiling"] for r in rows]))
+        r["run_id"], r["run_name"], r["n_jobs"] = run.id, run.name, n_jobs
+
+    # Summaries only; per-cell values are in trial_csv.
+    cells = pd.DataFrame(rows)
+    metrics = {
+        "mean_val_loss": float(cells["val_loss"].mean()),   # objectives
+        "mean_kl": float(cells["kl"].mean()),
+        # spread across DAGs: std of each DAG's KL averaged over sample sizes
+        "std_kl": float(cells.groupby(["in_degree", "dag_idx"])["kl"].mean().std()),
+        "frac_at_ceiling": float(cells["frac_at_ceiling"].mean()),
+    }
+    for n, g in cells.groupby("sample_size"):     # per sample size, over DAGs
+        metrics[f"mean_kl_n{n}"] = float(g["kl"].mean())
+        metrics[f"mean_val_loss_n{n}"] = float(g["val_loss"].mean())
     run.log(metrics)
     run.finish()
     flush(rows, trial_csv)
