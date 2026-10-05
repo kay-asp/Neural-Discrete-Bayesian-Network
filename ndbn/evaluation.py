@@ -77,17 +77,20 @@ def mle_param_stats(model):
 
 
 def timed_fit(fit_fn, *args, **kwargs):
-    """Run fit_fn(*args, **kwargs), returning (model, fit_time_s, rss_delta_bytes).
+    """Run fit_fn(*args, **kwargs) -> (model, wall_s, cpu_s, rss_delta_bytes).
 
+    wall_s is elapsed time; cpu_s is this process's CPU time (all its threads),
+    less sensitive to other processes competing for the machine. Neither is a
+    clean benchmark under parallel runs; use a serial run for timing results.
     rss_delta is only meaningful averaged over repeats and is noisy; the
     analytical/nbytes parameter curve is the precise memory evidence.
     """
     proc = psutil.Process(os.getpid())
     rss_before = proc.memory_info().rss
 
-    t0 = time.perf_counter()
+    t0, c0 = time.perf_counter(), time.process_time()
     model = fit_fn(*args, **kwargs)
-    fit_time = time.perf_counter() - t0
+    fit_time, cpu_time = time.perf_counter() - t0, time.process_time() - c0
 
     rss_delta = proc.memory_info().rss - rss_before
-    return model, fit_time, rss_delta
+    return model, fit_time, cpu_time, rss_delta
