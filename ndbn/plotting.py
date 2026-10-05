@@ -188,18 +188,37 @@ _HPARAM_COLS = ["hidden_dims", "activation", "lr", "weight_decay", "dropout",
 TRIAL_DEFAULTS = {"card": 2, "val_frac": 0.2, "n_test": 10000, "activation": "ReLU"}
 
 
-def summarise_trials(trials, by_sample_size=False, **filters):
-    """One row per W&B trial from the per-cell trial CSV(s), best mean_kl first.
+def _show(df):
+    """Display a table nicely in a notebook, or print it elsewhere."""
+    try:
+        from IPython.display import display
+        display(df)
+    except ImportError:
+        print(df.to_string())
 
-    filters : any column = value, e.g. in_degree=10, card=2, alpha=0.5,
-              sweep_id="abc123". Rows missing a filtered setting (older CSVs)
-              use TRIAL_DEFAULTS, or are dropped if it has no default.
-    mean_kl / mean_val_loss average over every (dag, sample size) cell, as the
-    sweep's objectives do; std_kl is the spread across DAGs (each DAG's KL
-    averaged over sample sizes first). by_sample_size=True instead gives one row
-    per (trial, sample_size), averaged over DAGs, in the same trial order.
-    Incomplete trials are dropped (fewer cells than recorded in n_cells; older
-    rows without n_cells: fewer than the most complete trial).
+
+def _round_sig(x, sig=1):
+    """Round to `sig` significant figures (3.2e-4 -> 3e-4); non-numbers unchanged."""
+    try:
+        return float(f"{float(x):.{sig - 1}e}")
+    except (TypeError, ValueError):
+        return x
+
+
+def summarise_trials(trials, show=True, **filters):
+    """Per (in_degree, sample_size): the trials within 1 kl_se of the best.
+
+    trials  : the per-cell trial CSV(s) (one row per trial x dag x sample size).
+    filters : any column = value, e.g. card=2, alpha=0.5, sweep_id="abc123".
+              Rows missing a filtered setting (older CSVs) use TRIAL_DEFAULTS,
+              or are dropped if it has no default.
+    For each (in_degree, sample_size), every trial gets mean_kl over its DAGs
+    and kl_se = sqrt(sum of per-cell kl_se^2) / n_cells, the standard error of
+    that mean from the test-row Monte Carlo error. Trials with fewer DAGs than
+    the most complete one in that pair are dropped. The best trial is the
+    lowest mean_kl; a trial is kept if mean_kl <= best mean_kl + best kl_se.
+    Prints one table per pair when show=True, and returns
+    {(in_degree, sample_size): DataFrame}, best first.
     """
     t = trials.copy()
     for col, val in filters.items():
@@ -213,24 +232,61 @@ def summarise_trials(trials, by_sample_size=False, **filters):
     t["run_name"] = t["run_name"].fillna(t["run_id"])   # pre-naming trials
 
     hp = [c for c in _HPARAM_COLS if c in t]
-    s = t.groupby("run_id").agg(
-        run_name=("run_name", "first"), in_degree=("in_degree", "first"),
-        cells=("kl", "size"), mean_kl=("kl", "mean"),
-        mean_val_loss=("val_loss", "mean"), **{c: (c, "first") for c in hp})
-    s["std_kl"] = t.groupby(["run_id", "dag_idx"])["kl"].mean().groupby("run_id").std()
-    expected = (t.groupby("run_id")["n_cells"].first() if "n_cells" in t
-                else pd.Series(np.nan, index=s.index))
-    s = s[s["cells"] >= expected.reindex(s.index).fillna(s["cells"].max())]
-    s["rank_kl"] = s["mean_kl"].rank(method="first").astype(int)
-    s["rank_val"] = s["mean_val_loss"].rank(method="first").astype(int)
-    s = s.sort_values("mean_kl").reset_index()
-    if not by_sample_size:
-        return s
+    extra = [c for c in ["stored_params", "best_epoch_mean", "fit_time_s"] if c in t]
+    tables = {}
+    for (k, n), g in t.groupby(["in_degree", "sample_size"]):
+        s = g.groupby("run_id").agg(
+            run_name=("run_name", "first"),
+            mean_kl=("kl", "mean"),
+            kl_se=("kl_se", lambda x: np.sqrt((x ** 2).sum()) / len(x)),
+            mean_val_loss=("val_loss", "mean"),
+            n_dags=("dag_idx", "nunique"),
+            **{c: (c, "first") for c in hp},
+            **{c: (c, "mean") for c in extra},
+            **({"sweep_id": ("sweep_id", "first")} if "sweep_id" in g else {}))
+        s = s[s["n_dags"] == s["n_dags"].max()].sort_values("mean_kl")
+        best = s.iloc[0]
+        top = s[s["mean_kl"] <= best["mean_kl"] + best["kl_se"]].reset_index()
+        tables[(k, n)] = top
+        if show:
+            print(f"in-degree {k}, N = {n}: best {best['mean_kl']:.4f} ± {best['kl_se']:.4f}"
+                  f" -> {len(top)} of {len(s)} configs within 1 kl_se")
+            _show(top.round(4))
+    return tables
 
-    per_n = (t[t["run_id"].isin(s["run_id"])]
-             .groupby(["run_id", "sample_size"])
-             .agg(mean_kl=("kl", "mean"), mean_val_loss=("val_loss", "mean"))
-             .reset_index())
-    keep = ["run_id", "run_name", "rank_kl", *hp]
-    return (s[keep].merge(per_n, on="run_id")
-            .sort_values(["rank_kl", "sample_size"]).reset_index(drop=True))
+
+def common_configs(tables, match_on=("hidden_dims", "dropout", "patience", "batch_size"),
+                   round_cols=("lr", "weight_decay"), min_tables=2, show=True):
+    """Configs in the top (within 1 kl_se) of more than one summarise_trials table.
+
+    tables     : the dict returned by summarise_trials.
+    match_on   : setting columns that define "the same config". Continuous
+                 sampled values never repeat exactly, so the default uses the
+                 discrete settings; add e.g. "lr" to also match on it.
+    round_cols : columns rounded to 1 significant figure before matching, if
+                 they are in match_on (3.2e-4 and 2.8e-4 both become 3e-4).
+    Returns one row per config in >= min_tables tables: its settings,
+    n_tables, top_in (which in-degree / sample size tables) and n_trials.
+    Mean KL is not compared across tables: its scale differs with k and N.
+    """
+    match_on = list(match_on)
+    rows = []
+    for (k, n), top in tables.items():
+        for _, r in top.iterrows():
+            key = {c: (_round_sig(r[c]) if c in round_cols else r[c]) for c in match_on}
+            rows.append({**key, "table": f"k{k} N{n}", "run_id": r["run_id"]})
+    if not rows:
+        return pd.DataFrame(columns=[*match_on, "n_tables", "top_in", "n_trials"])
+    df = pd.DataFrame(rows)
+    out = (df.groupby(match_on, dropna=False)
+           .agg(n_tables=("table", "nunique"),
+                top_in=("table", lambda x: ", ".join(dict.fromkeys(x))),
+                n_trials=("run_id", "nunique"))
+           .reset_index())
+    out = (out[out["n_tables"] >= min_tables]
+           .sort_values(["n_tables", "n_trials"], ascending=False).reset_index(drop=True))
+    if show:
+        print(f"configs (matched on {', '.join(match_on)}) in the top of "
+              f">= {min_tables} of {len(tables)} tables: {len(out)}")
+        _show(out)
+    return out
