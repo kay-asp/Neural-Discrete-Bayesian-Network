@@ -23,7 +23,10 @@ def train_nn_cpds(G, df_train, df_val, card,
                   hidden_dims, activation,
                   n_epochs=500, lr=1e-3, dropout=0.0,
                   weight_decay=1e-4, batch_size=64, patience=20,
-                  seed=0, verbose=False, trace=None):
+                  optimizer="adam", seed=0, verbose=False, trace=None):
+    # "adam": coupled L2 (weight decay largely cancelled by the adaptive step);
+    # "adamw": decoupled weight decay, what you want when sweeping weight_decay
+    opt_cls = {"adam": torch.optim.Adam, "adamw": torch.optim.AdamW}[optimizer]
     torch.manual_seed(seed)
     nodes = list(G.nodes())
     parents = {node: sorted(G.predecessors(node)) for node in nodes}
@@ -36,8 +39,8 @@ def train_nn_cpds(G, df_train, df_val, card,
     for node in nodes:
         models[node] = NodeNN(len(parents[node]), card, hidden_dims,
                               activation, dropout).to(DEVICE)
-        optimizers[node] = torch.optim.Adam(models[node].parameters(),
-                                            lr=lr, weight_decay=weight_decay)
+        optimizers[node] = opt_cls(models[node].parameters(),
+                                   lr=lr, weight_decay=weight_decay)
         Xtr[node] = one_hot_parents(df_train, parents[node], card)
         ytr[node] = torch.as_tensor(df_train[node].to_numpy().astype(np.int64), device=DEVICE)
         Xva[node] = one_hot_parents(df_val, parents[node], card)
