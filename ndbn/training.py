@@ -55,6 +55,7 @@ def train_nn_cpds(G, df_train, df_val, card,
     patience_ctr    = {node: 0 for node in nodes}
     stopped         = {node: False for node in nodes}
     stop_epoch      = {node: n_epochs for node in nodes}
+    best_epoch      = {node: 0 for node in nodes}    # epoch whose weights are kept
 
     # Diagnostics state — inert when trace is None
     trace = trace or Trace()
@@ -101,6 +102,7 @@ def train_nn_cpds(G, df_train, df_val, card,
             if val_loss[node] < best_val_loss[node] - 1e-6:
                 best_train_loss[node] = train_loss.get(node, float("nan"))
                 best_val_loss[node]   = val_loss[node]
+                best_epoch[node]      = epoch + 1
                 patience_ctr[node] = 0
                 best_state[node] = {k: v.detach().clone()
                                     for k, v in model.state_dict().items()}
@@ -135,7 +137,7 @@ def train_nn_cpds(G, df_train, df_val, card,
     return NeuralCPDs(
         models=models, parents=parents, card=card,
         best_val_=best_val_loss, train_loss_=best_train_loss,
-        train_time_=train_times, stop_epoch_=stop_epoch,
+        train_time_=train_times, stop_epoch_=stop_epoch, best_epoch_=best_epoch,
         history_=({"train": hist_train_loss, "val": hist_val_loss}
                   if trace.history else {}),
     )

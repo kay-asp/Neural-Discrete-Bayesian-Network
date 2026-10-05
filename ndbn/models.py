@@ -62,7 +62,8 @@ class NeuralCPDs:
     best_val_:   dict = field(default_factory=dict)
     train_loss_:  dict = field(default_factory=dict)
     train_time_: dict = field(default_factory=dict)
-    stop_epoch_: dict = field(default_factory=dict)
+    stop_epoch_: dict = field(default_factory=dict)   # when patience ran out
+    best_epoch_: dict = field(default_factory=dict)   # epoch of the kept weights
     history_:    dict = field(default_factory=dict)
 
     def __getitem__(self, node):
