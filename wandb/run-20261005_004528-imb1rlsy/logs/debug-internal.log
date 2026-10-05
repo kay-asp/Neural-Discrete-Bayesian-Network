@@ -1,0 +1,19 @@
+{"time":"2026-10-05T00:45:28.0824653+02:00","level":"INFO","msg":"wandb-core"}
+{"time":"2026-10-05T00:45:28.0824653+02:00","level":"INFO","msg":"stream: starting","core version":"0.30.0"}
+{"time":"2026-10-05T00:45:28.0851175+02:00","level":"INFO","msg":"stream: created new stream","id":"imb1rlsy"}
+{"time":"2026-10-05T00:45:28.0851175+02:00","level":"INFO","msg":"handler: started"}
+{"time":"2026-10-05T00:45:28.0861533+02:00","level":"INFO","msg":"stream: started"}
+{"time":"2026-10-05T00:45:28.0861533+02:00","level":"INFO","msg":"writer: started","stream_id":"imb1rlsy"}
+{"time":"2026-10-05T00:45:28.0861533+02:00","level":"INFO","msg":"sender: started"}
+{"time":"2026-10-05T00:45:29.8042835+02:00","level":"INFO","msg":"filestream: sending request","total_files":1,"events_offset":0,"events_lines":1}
+{"time":"2026-10-05T00:45:30.3503232+02:00","level":"INFO","msg":"filestream: request sent","status":"200 OK"}
+{"time":"2026-10-05T00:45:44.8046489+02:00","level":"INFO","msg":"filestream: sending request","total_files":3,"history_offset":0,"history_lines":102,"events_offset":1,"events_lines":3,"uploaded_len":2}
+{"time":"2026-10-05T00:45:45.303825+02:00","level":"INFO","msg":"filestream: request sent","status":"200 OK"}
+{"time":"2026-10-05T00:45:56.3194142+02:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2026-10-05T00:45:56.3194142+02:00","level":"INFO","msg":"filestream: sending request","total_files":2,"history_offset":102,"history_lines":98,"uploaded_len":2,"complete":true,"exit_code":0}
+{"time":"2026-10-05T00:45:57.3649226+02:00","level":"INFO","msg":"filestream: request sent","status":"200 OK"}
+{"time":"2026-10-05T00:45:57.3685767+02:00","level":"INFO","msg":"handler: operation stats","stats":{}}
+{"time":"2026-10-05T00:45:57.374906+02:00","level":"INFO","msg":"stream: finishing up"}
+{"time":"2026-10-05T00:45:57.374906+02:00","level":"INFO","msg":"handler: closed"}
+{"time":"2026-10-05T00:45:57.3754128+02:00","level":"INFO","msg":"sender: closed"}
+{"time":"2026-10-05T00:45:57.3754128+02:00","level":"INFO","msg":"stream: all finished"}

@@ -1,0 +1,20 @@
+{"time":"2026-10-04T23:54:41.8655738+02:00","level":"INFO","msg":"wandb-core"}
+{"time":"2026-10-04T23:54:41.8655738+02:00","level":"INFO","msg":"stream: starting","core version":"0.30.0"}
+{"time":"2026-10-04T23:54:41.8681201+02:00","level":"INFO","msg":"stream: created new stream","id":"5nss60e0"}
+{"time":"2026-10-04T23:54:41.8681201+02:00","level":"INFO","msg":"handler: started"}
+{"time":"2026-10-04T23:54:41.8691612+02:00","level":"INFO","msg":"stream: started"}
+{"time":"2026-10-04T23:54:41.8691612+02:00","level":"INFO","msg":"writer: started","stream_id":"5nss60e0"}
+{"time":"2026-10-04T23:54:41.8691612+02:00","level":"INFO","msg":"sender: started"}
+{"time":"2026-10-04T23:54:43.7506749+02:00","level":"INFO","msg":"filestream: sending request","total_files":1,"events_offset":0,"events_lines":1}
+{"time":"2026-10-04T23:54:44.257591+02:00","level":"INFO","msg":"filestream: request sent","status":"200 OK"}
+{"time":"2026-10-04T23:54:58.7509212+02:00","level":"INFO","msg":"filestream: sending request","total_files":3,"history_offset":0,"history_lines":29,"events_offset":1,"events_lines":2,"uploaded_len":2}
+{"time":"2026-10-04T23:54:59.0944711+02:00","level":"INFO","msg":"filestream: request sent","status":"200 OK"}
+{"time":"2026-10-04T23:55:08.637678+02:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2026-10-04T23:55:08.637678+02:00","level":"INFO","msg":"filestream: sending request","total_files":3,"history_offset":29,"history_lines":53,"events_offset":3,"events_lines":1,"uploaded_len":2,"complete":true,"exit_code":0}
+{"time":"2026-10-04T23:55:08.987802+02:00","level":"INFO","msg":"filestream: request sent","status":"200 OK"}
+{"time":"2026-10-04T23:55:08.9916708+02:00","level":"INFO","msg":"handler: operation stats","stats":{}}
+{"time":"2026-10-04T23:55:08.9968642+02:00","level":"INFO","msg":"stream: finishing up"}
+{"time":"2026-10-04T23:55:08.9968642+02:00","level":"INFO","msg":"handler: closed"}
+{"time":"2026-10-04T23:55:08.9968642+02:00","level":"INFO","msg":"sender: closed"}
+{"time":"2026-10-04T23:55:08.9968642+02:00","level":"INFO","msg":"stream: all finished"}
+{"time":"2026-10-04T23:55:10.9971561+02:00","level":"ERROR","msg":"stream: failed to shut down analytics","error":"shutdown errors: [failed to upload metrics: context deadline exceeded: retry-able request failure: Post \"https://api.wandb.ai/sdk/otel/v1/metrics\": context deadline exceeded context deadline exceeded]"}
