@@ -8,6 +8,17 @@ import torch.nn as nn
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
+def set_device(name=None):
+    """Set the device used for all neural CPDs; None = auto (cuda if available).
+
+    Read the current value as models.DEVICE (not a `from .models import DEVICE`
+    copy), so a change here reaches every module.
+    """
+    global DEVICE
+    DEVICE = name or ("cuda" if torch.cuda.is_available() else "cpu")
+    return DEVICE
+
+
 # Linear Softmax Baseline
 class NodeNN(nn.Module):
     # one-hot parent config -> softmax distribution over child states
