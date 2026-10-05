@@ -1,7 +1,8 @@
 """Experiment grid (MLE vs neural CPDs) and the hyperparameter sweep."""
 import logging
 import os
-from functools import partial
+import subprocess
+from functools import lru_cache, partial
 
 import numpy as np
 import pandas as pd
@@ -18,17 +19,33 @@ from .tracing import Trace, history_matrix
 from .training import fit_nn, split_train_val
 
 
-def config_exists(df, estimator, dag, n_nodes, in_deg, alpha, sample_size):
+# Rows written before cardinality was recorded all used card=2.
+LEGACY_CARD = 2
+
+
+def with_card(df):
+    """df with a `card` column, rows missing it (older CSVs) set to LEGACY_CARD."""
+    df = df.copy()
+    df["card"] = df["card"].fillna(LEGACY_CARD) if "card" in df else LEGACY_CARD
+    return df
+
+
+def config_exists(df, estimator, dag, n_nodes, in_deg, alpha, sample_size, card=None):
+    """Is this config already in df? card=None skips the card check; pass
+    with_card(df) so rows from before card was recorded count as card=2."""
     if df.empty or "estimator" not in df.columns:
         return False
-    return (
+    match = (
         (df["estimator"]   == estimator) &
         (df["dag_idx"] == dag) &
         (df["n_nodes"] == n_nodes) &
         (df["in_degree"] == in_deg) &
         (df["alpha"] == alpha) &
         (df["sample_size"] == sample_size)
-    ).any()
+    )
+    if card is not None:
+        match &= df["card"] == card
+    return match.any()
 
 def flush(records, path):
     if not records:
@@ -48,16 +65,18 @@ def build_dag(dag, in_deg, n_nodes, alpha, card):
 
     Shared by the main experiment and the sweep, so both see the same networks.
     """
-    # alpha is left out of the seeds so every alpha shares the same DAG (paired)
+    # alpha and card are left out of the seeds, so every alpha and card shares
+    # the same DAG structure and data seeds (paired comparisons)
     G = gen_dag_indegree(n_nodes, in_deg, seed=make_seed("dag", dag, in_deg, n_nodes))
     true_model = gen_CPTs(G, card, alpha, seed=make_seed("cpt", dag, in_deg, n_nodes))
     return G, true_model
 
 
-def dag_data_dir(results_dir, alpha, n_nodes, in_deg, dag):
-    """Where one DAG's cached train.csv / test.csv live."""
-    path = os.path.join(results_dir, "data", f"alpha_{alpha}", f"BN_{n_nodes}",
-                        f"indegree_{in_deg}", f"dag_{dag}")
+def dag_data_dir(results_dir, alpha, n_nodes, in_deg, dag, card):
+    """Where one DAG's cached train.csv / test.csv live (keyed on card too, so
+    different cardinalities never share cached samples)."""
+    path = os.path.join(results_dir, "data", f"card_{card}", f"alpha_{alpha}",
+                        f"BN_{n_nodes}", f"indegree_{in_deg}", f"dag_{dag}")
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -83,7 +102,7 @@ def load_dag(results_dir, dag, in_deg, n_nodes, alpha, card, n_train, n_test=Non
     parallel jobs means workers only read the CSVs (no two writers per file).
     """
     G, true_model = build_dag(dag, in_deg, n_nodes, alpha, card)
-    dag_dir = dag_data_dir(results_dir, alpha, n_nodes, in_deg, dag)
+    dag_dir = dag_data_dir(results_dir, alpha, n_nodes, in_deg, dag, card)
     data = load_or_simulate(os.path.join(dag_dir, "train.csv"), true_model,
                             n_train, make_seed("train", dag, in_deg, n_nodes))
     test_data = None if n_test is None else load_or_simulate(
@@ -137,11 +156,26 @@ def _parallel_map(fn, jobs, n_jobs=1, device=None, torch_threads=None):
         delayed(_call_in_worker)(fn, job, device, threads) for job in jobs)
 
 
+@lru_cache(maxsize=None)
+def code_version():
+    """Short git commit of this code, "+dirty" if it has uncommitted changes;
+    None outside a git checkout. Recorded on every row."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=here,
+                                capture_output=True, text=True, check=True).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain", "--", "."], cwd=here,
+                               capture_output=True, text=True, check=True).stdout.strip()
+        return commit + ("+dirty" if dirty else "")
+    except Exception:
+        return None
+
+
 def run_settings(n_jobs):
     """Columns recording how a row was run, so timings are read in context."""
     return {"n_jobs": n_jobs, "device": _models.DEVICE,
             "torch_threads": torch.get_num_threads(),
-            "torch_version": torch.__version__}
+            "torch_version": torch.__version__, "code_version": code_version()}
 
 
 # train_nn_cpds keyword arguments an estimator / arm / sweep config may set,
@@ -232,9 +266,18 @@ def _run_dag_job(job, estimators, sample_sizes, card, val_frac, n_test, n_epochs
                 "n_nodes":     n_nodes,
                 "in_degree":   in_deg,
                 "alpha":       alpha,
+                "card":        card,
                 "sample_size": samples,          # budget
                 "n_fit":       n_fit,            # rows fitted (NN excludes val)
                 "density":     density,
+                # every seed this row used (recomputable from the config via
+                # make_seed, stored in case that ever changes)
+                "dag_seed":    make_seed("dag", dag, in_deg, n_nodes),
+                "cpt_seed":    make_seed("cpt", dag, in_deg, n_nodes),
+                "train_seed":  make_seed("train", dag, in_deg, n_nodes),
+                "test_seed":   make_seed("test", dag, in_deg, n_nodes),
+                "split_seed":  split_seed,
+                "nn_seed":     nn_seed,
                 "kl":          kl,
                 "kl_se":       se,
                 "fit_time_s":  fit_time,         # wall clock
@@ -252,16 +295,18 @@ def run_experiments(node_counts, in_degrees, alphas, n_dags, sample_sizes,
                     n_jobs=1, device=None, torch_threads=None):
     """Run the full grid, appending rows to <results_dir>/<results_name>.
 
-    Resumable: configs already in that CSV are skipped, and each DAG's
-    train/test samples are cached under <results_dir>/data/ (shared by every
-    results_name, so a timing run reuses the same data).
+    Resumable: configs already in that CSV (for this card) are skipped, and
+    each DAG's train/test samples are cached under <results_dir>/data/card_*/
+    (shared by every results_name, so a timing run reuses the same data).
+    Rows record card, so runs with different cardinalities can share one CSV.
     n_jobs, device, torch_threads : speed settings, see _parallel_map. One job
     is one DAG; rows are written as each job finishes. fit_time_s from a
     parallel run is inflated by contention: take timing from a serial run.
     """
     os.makedirs(results_dir, exist_ok=True)
     results_csv = os.path.join(results_dir, results_name)
-    existing_df = pd.read_csv(results_csv) if os.path.exists(results_csv) else pd.DataFrame()
+    existing_df = with_card(pd.read_csv(results_csv)) if os.path.exists(results_csv) \
+        else pd.DataFrame()
 
     jobs = []
     for n_nodes in node_counts:
@@ -271,7 +316,7 @@ def run_experiments(node_counts, in_degrees, alphas, n_dags, sample_sizes,
                 for dag in range(1, n_dags + 1):
                     todo = {(est["name"], s) for est in estimators for s in sample_sizes
                             if not config_exists(existing_df, est["name"], dag,
-                                                 n_nodes, in_deg, alpha, s)}
+                                                 n_nodes, in_deg, alpha, s, card)}
                     if todo:
                         jobs.append({"n_nodes": n_nodes, "in_degree": in_deg,
                                      "alpha": alpha, "dag": dag, "todo": todo})
@@ -349,7 +394,7 @@ def _run_sweep_job(job, card, val_frac, wandb_project, hist_dir, results_dir,
     if model.history_:
         order = list(model.history_["train"])
         np.savez_compressed(
-            os.path.join(hist_dir, f"hist_{arm['name']}_k{k}_d{dag}_n{samples}.npz"),
+            os.path.join(hist_dir, f"hist_{arm['name']}_c{card}_k{k}_d{dag}_n{samples}.npz"),
             train=history_matrix(model, "train"),
             val=history_matrix(model, "val"),
             in_deg=np.array([G.in_degree(v) for v in order]),
@@ -426,6 +471,11 @@ def parse_hidden_dims(spec):
     return () if spec in ("", "linear", "[]") else tuple(int(h) for h in spec.split("_"))
 
 
+# activations a sweep config may name ("activation": "tanh"); default relu
+ACTIVATIONS = {"relu": nn.ReLU, "tanh": nn.Tanh, "gelu": nn.GELU,
+               "elu": nn.ELU, "leaky_relu": nn.LeakyReLU, "sigmoid": nn.Sigmoid}
+
+
 def _trial_cell(job, hidden_dims, activation, kw, card, val_frac, results_dir,
                 n_cached, n_test):
     """One (k, dag, sample size) cell of a sweep trial -> its row (no W&B)."""
@@ -433,13 +483,13 @@ def _trial_cell(job, hidden_dims, activation, kw, card, val_frac, results_dir,
                                        job["n_nodes"], job["alpha"])
     G, true_model, data, test_data = load_dag(results_dir, dag, k, n_nodes, alpha,
                                               card, n_cached, n_test)
-    train_df, val_df = split_train_val(
-        data.iloc[:samples], val_frac=val_frac,
-        seed=make_seed("split", dag, k, n_nodes, samples))
+    split_seed = make_seed("split", dag, k, n_nodes, samples)
+    nn_seed = make_seed("nn", dag, k, n_nodes, samples)
+    train_df, val_df = split_train_val(data.iloc[:samples], val_frac=val_frac,
+                                       seed=split_seed)
     model, t, cpu_t, _ = timed_fit(
         fit_nn, G, train_df, card, val_data=val_df,
-        hidden_dims=hidden_dims, activation=activation,
-        seed=make_seed("nn", dag, k, n_nodes, samples), **kw)
+        hidden_dims=hidden_dims, activation=activation, seed=nn_seed, **kw)
 
     kl, kl_se = kl_nn(true_model, model, test_data, card)
     stops = list(model.stop_epoch_.values())
@@ -447,6 +497,9 @@ def _trial_cell(job, hidden_dims, activation, kw, card, val_frac, results_dir,
         "in_degree": k, "dag_idx": dag,
         "n_nodes": n_nodes, "sample_size": samples,
         "n_fit": len(train_df), "alpha": alpha, "card": card,
+        "val_frac": val_frac, "n_test": n_test, "n_cached": n_cached,
+        "dag_seed": make_seed("dag", dag, k, n_nodes),
+        "split_seed": split_seed, "nn_seed": nn_seed,
         "hidden_dims": str(list(hidden_dims)),
         "activation": "linear" if activation is None else activation.__name__,
         **{x: kw.get(x, d) for x, d in NN_HPARAMS.items()},
@@ -457,6 +510,7 @@ def _trial_cell(job, hidden_dims, activation, kw, card, val_frac, results_dir,
         "stop_epoch_mean": float(np.mean(stops)),
         "frac_at_ceiling": float(np.mean([e >= kw["n_epochs"] for e in stops])),
         "device": _models.DEVICE, "torch_threads": torch.get_num_threads(),
+        "torch_version": torch.__version__, "code_version": code_version(),
     }
 
 
@@ -467,7 +521,11 @@ def sweep_trial(k_values, n_dags, n_nodes, alpha, sample_sizes, card, val_frac,
     (k, dag, sample size) cell. Use as wandb.agent(sweep_id, function=partial(...)).
 
     The config comes from wandb.config: hidden_dims as a string ("128_64",
-    "linear") plus any NN_HPARAMS keys. Two objectives are logged; the sweep
+    "linear"), optionally activation (a key of ACTIVATIONS, default "relu"),
+    plus any NN_HPARAMS keys. Every argument of this function except file
+    paths is also written to the W&B config and to each CSV row (lists as
+    strings), so a setting added or changed later is recorded automatically;
+    rows also carry the sweep id, seeds and code version. Two objectives are logged; the sweep
     config's metric picks one:
       mean_val_loss : mean over cells of the summed per-node best validation
                       cross-entropy (uses only each DAG's train/val data)
@@ -476,13 +534,22 @@ def sweep_trial(k_values, n_dags, n_nodes, alpha, sample_sizes, card, val_frac,
                       from the evaluation DAGs.
     dag_offset as in run_sweep; same DAG indexing, data, splits and seeds, so
     results stay paired with run_sweep at the same offset.
-    Also logged: std_kl (spread across DAGs) and mean_kl_n{N} /
-    mean_val_loss_n{N} per sample size. Per-cell results go only to trial_csv
+    The run summary holds those two (over every cell) plus std_kl (spread
+    across DAGs) and frac_at_ceiling. Per sample size, mean_kl / mean_val_loss
+    (over DAGs) are also logged as steps against sample_size, for plotting
+    mean_kl vs sample_size in W&B. Per-cell results go only to trial_csv
     (one row per cell). Runs are named e.g. "k10_128_64_3" (k, hidden_dims,
     W&B trial number).
     n_jobs, device, torch_threads : speed settings, see _parallel_map. The
     cells are fitted in parallel; all W&B logging stays in this process.
     """
+    # every fixed setting of this trial (all arguments except paths), captured
+    # before any other local exists; logged to W&B and stored on every row
+    args = dict(locals())
+    settings = {name: (str(list(v)) if isinstance(v, (list, tuple)) else v)
+                for name, v in args.items() if name not in ("results_dir", "trial_csv")}
+    settings["in_degree"] = k_values[0] if len(k_values) == 1 else str(list(k_values))
+
     import wandb
 
     run = wandb.init()
@@ -491,8 +558,13 @@ def sweep_trial(k_values, n_dags, n_nodes, alpha, sample_sizes, card, val_frac,
     # (its auto name ends in it: "genial-sweep-3"). Settings are in the config.
     trial_no = run.name.rsplit("-", 1)[-1] if run.name else run.id
     run.name = f"k{'_'.join(map(str, k_values))}_{config['hidden_dims']}_{trial_no}"
+    # fixed settings, so W&B can filter / group runs by them (not sweep
+    # parameters, so the search ignores them)
+    run.config.update({**settings, "code_version": code_version()},
+                      allow_val_change=True)
+    sweep_id = getattr(run, "sweep_id", None)
     hidden_dims = parse_hidden_dims(config["hidden_dims"])
-    activation = nn.ReLU if hidden_dims else None
+    activation = ACTIVATIONS[config.get("activation", "relu")] if hidden_dims else None
     kw = {x: config[x] for x in NN_HPARAMS if x in config}
     kw.setdefault("n_epochs", NN_HPARAMS["n_epochs"])
 
@@ -510,21 +582,50 @@ def sweep_trial(k_values, n_dags, n_nodes, alpha, sample_sizes, card, val_frac,
     rows.sort(key=lambda r: (r["in_degree"], r["dag_idx"], r["sample_size"]))
 
     for r in rows:
-        r["run_id"], r["run_name"], r["n_jobs"] = run.id, run.name, n_jobs
+        # settings first, then the cell's own columns (they win on a clash,
+        # e.g. the cell's sample_size over the trial's sample_sizes list)
+        r.update({**{x: v for x, v in settings.items() if x not in r},
+                  "run_id": run.id, "run_name": run.name, "sweep_id": sweep_id,
+                  "n_cells": len(rows)})
 
     # Summaries only; per-cell values are in trial_csv.
     cells = pd.DataFrame(rows)
+    # per sample size (mean over DAGs): one logged step per N, with sample_size
+    # as the x-axis, so W&B plots mean_kl against sample_size
+    run.define_metric("sample_size")
+    for m in ("mean_kl", "mean_val_loss"):
+        run.define_metric(m, step_metric="sample_size")
+    for n, g in cells.groupby("sample_size"):
+        run.log({"sample_size": int(n), "mean_kl": float(g["kl"].mean()),
+                 "mean_val_loss": float(g["val_loss"].mean())})
+    # run summary = the sweep's objectives, over every cell; set after the
+    # per-N steps so it isn't left at the last sample size's value
     metrics = {
-        "mean_val_loss": float(cells["val_loss"].mean()),   # objectives
+        "mean_val_loss": float(cells["val_loss"].mean()),
         "mean_kl": float(cells["kl"].mean()),
         # spread across DAGs: std of each DAG's KL averaged over sample sizes
         "std_kl": float(cells.groupby(["in_degree", "dag_idx"])["kl"].mean().std()),
         "frac_at_ceiling": float(cells["frac_at_ceiling"].mean()),
     }
-    for n, g in cells.groupby("sample_size"):     # per sample size, over DAGs
-        metrics[f"mean_kl_n{n}"] = float(g["kl"].mean())
-        metrics[f"mean_val_loss_n{n}"] = float(g["val_loss"].mean())
-    run.log(metrics)
+    run.summary.update(metrics)
+    where = (run.entity, run.project, run.id, run.name)   # read before finish()
     run.finish()
+    _rename_wandb_run(*where)
     flush(rows, trial_csv)
     return metrics
+
+
+def _rename_wandb_run(entity, project, run_id, name):
+    """Make the W&B server show `name`. Setting run.name inside a sweep run
+    doesn't always reach the server, so rename via the public API after the
+    run has finished. Display only: a failure warns and never stops the sweep.
+    """
+    try:
+        import wandb
+        api_run = wandb.Api().run(f"{entity}/{project}/{run_id}")
+        if api_run.name != name:
+            api_run.name = name
+            api_run.update()
+    except Exception as e:
+        print(f"W&B rename of run {run_id} to {name!r} failed ({e}); "
+              "the CSV's run_name/run_id still identify it")

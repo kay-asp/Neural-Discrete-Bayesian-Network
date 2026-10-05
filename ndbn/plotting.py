@@ -7,6 +7,7 @@ which slice you're viewing.
 """
 
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 
 # ── Defaults: the "held constant" values for each variable ───────────────────
@@ -16,6 +17,7 @@ DEFAULT_ALPHA        = 0.5
 DEFAULT_N_NODES      = 20
 DEFAULT_IN_DEGREE    = 4
 DEFAULT_ESTIMATOR    ="mle"
+DEFAULT_CARD         = 2
 
 # ── Palette ──────────────────────────────────────────────────────────────────
 
@@ -33,7 +35,7 @@ def _colors(n):
 # ── Core filter helper ──────────────────────────────────────────────────────
 
 def _filter(df, x, hue, alpha=None, sample_size=None,
-            n_nodes=None, in_degree=None, estimator=None):
+            n_nodes=None, in_degree=None, estimator=None, card=None):
     """Filter df to fixed values for every variable that isn't x or hue."""
     sub = df.copy()
     skip = {x, hue}
@@ -53,6 +55,12 @@ def _filter(df, x, hue, alpha=None, sample_size=None,
     if "estimator" not in skip and estimator is not None and "estimator" in sub.columns:
         sub = sub[sub["estimator"] == estimator]
 
+    # rows from before card was recorded were all card=2
+    if card is not None or "card" in skip:
+        sub["card"] = sub["card"].fillna(2) if "card" in sub else 2
+    if "card" not in skip and card is not None:
+        sub = sub[sub["card"] == card]
+
     return sub
 
 
@@ -62,7 +70,7 @@ def plot_grouped_curves(
     df, x, hue, y="kl",
     # fixed-variable overrides (None → use DEFAULT_*)
     alpha=None, sample_size=None,
-    n_nodes=None, in_degree=None, estimator=None,
+    n_nodes=None, in_degree=None, estimator=None, card=None,
     # plot styling
     logy=False, err=None, min_obs=3,
     xlabel=None, ylabel=None, title=None, hue_label=None,
@@ -74,10 +82,12 @@ def plot_grouped_curves(
     if n_nodes is None:      n_nodes = DEFAULT_N_NODES
     if in_degree is None:    in_degree = DEFAULT_IN_DEGREE
     if estimator is None:    estimator = DEFAULT_ESTIMATOR
+    if card is None:         card = DEFAULT_CARD
 
     sub = _filter(df, x, hue,
                   alpha=alpha, sample_size=sample_size,
-                  n_nodes=n_nodes, in_degree=in_degree, estimator=estimator)
+                  n_nodes=n_nodes, in_degree=in_degree, estimator=estimator,
+                  card=card)
 
     if sub.empty:
         print(f"WARNING: no data after filtering for {x} vs {hue}. "
@@ -92,6 +102,7 @@ def plot_grouped_curves(
     if "n_nodes"     not in skip: held.append(f"nodes={n_nodes}")
     if "in_degree"   not in skip: held.append(f"k={in_degree}")
     if "estimator"   not in skip: held.append(f"est={estimator}")
+    if "card"        not in skip: held.append(f"card={card}")
     held_str = ",  ".join(held)
 
     own_fig = ax is None
@@ -166,3 +177,60 @@ def plot_cardinality_wall(cards=(2, 3, 4, 5), max_k=12,
             fig.savefig(out_path, dpi=150)
         return fig, ax
     return ax
+
+
+# ── Hyperparameter sweep (hparam_trials_k*.csv) ─────────────────────────────
+
+_HPARAM_COLS = ["hidden_dims", "activation", "lr", "weight_decay", "dropout",
+                "patience", "batch_size", "optimizer", "n_epochs"]
+
+# values for settings that older trial rows didn't record yet
+TRIAL_DEFAULTS = {"card": 2, "val_frac": 0.2, "n_test": 10000, "activation": "ReLU"}
+
+
+def summarise_trials(trials, by_sample_size=False, **filters):
+    """One row per W&B trial from the per-cell trial CSV(s), best mean_kl first.
+
+    filters : any column = value, e.g. in_degree=10, card=2, alpha=0.5,
+              sweep_id="abc123". Rows missing a filtered setting (older CSVs)
+              use TRIAL_DEFAULTS, or are dropped if it has no default.
+    mean_kl / mean_val_loss average over every (dag, sample size) cell, as the
+    sweep's objectives do; std_kl is the spread across DAGs (each DAG's KL
+    averaged over sample sizes first). by_sample_size=True instead gives one row
+    per (trial, sample_size), averaged over DAGs, in the same trial order.
+    Incomplete trials are dropped (fewer cells than recorded in n_cells; older
+    rows without n_cells: fewer than the most complete trial).
+    """
+    t = trials.copy()
+    for col, val in filters.items():
+        if col not in t:
+            t[col] = np.nan
+        if col in TRIAL_DEFAULTS:
+            t[col] = t[col].fillna(TRIAL_DEFAULTS[col])
+        t = t[t[col] == val]
+    if "run_name" not in t:
+        t["run_name"] = np.nan
+    t["run_name"] = t["run_name"].fillna(t["run_id"])   # pre-naming trials
+
+    hp = [c for c in _HPARAM_COLS if c in t]
+    s = t.groupby("run_id").agg(
+        run_name=("run_name", "first"), in_degree=("in_degree", "first"),
+        cells=("kl", "size"), mean_kl=("kl", "mean"),
+        mean_val_loss=("val_loss", "mean"), **{c: (c, "first") for c in hp})
+    s["std_kl"] = t.groupby(["run_id", "dag_idx"])["kl"].mean().groupby("run_id").std()
+    expected = (t.groupby("run_id")["n_cells"].first() if "n_cells" in t
+                else pd.Series(np.nan, index=s.index))
+    s = s[s["cells"] >= expected.reindex(s.index).fillna(s["cells"].max())]
+    s["rank_kl"] = s["mean_kl"].rank(method="first").astype(int)
+    s["rank_val"] = s["mean_val_loss"].rank(method="first").astype(int)
+    s = s.sort_values("mean_kl").reset_index()
+    if not by_sample_size:
+        return s
+
+    per_n = (t[t["run_id"].isin(s["run_id"])]
+             .groupby(["run_id", "sample_size"])
+             .agg(mean_kl=("kl", "mean"), mean_val_loss=("val_loss", "mean"))
+             .reset_index())
+    keep = ["run_id", "run_name", "rank_kl", *hp]
+    return (s[keep].merge(per_n, on="run_id")
+            .sort_values(["rank_kl", "sample_size"]).reset_index(drop=True))
