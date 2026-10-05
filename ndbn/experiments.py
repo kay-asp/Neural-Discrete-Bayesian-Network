@@ -541,8 +541,9 @@ def sweep_trial(k_values, n_dags, n_nodes, alpha, sample_sizes, card, val_frac,
     across DAGs) and frac_at_ceiling. Per sample size, mean_kl / mean_val_loss
     (over DAGs) are also logged as steps against sample_size, for plotting
     mean_kl vs sample_size in W&B. Per-cell results go only to trial_csv
-    (one row per cell). Runs are named e.g. "k10_128_64_3" (k, hidden_dims,
-    W&B trial number).
+    (one row per cell). Runs are named e.g. "07_256x128_lr3e-4" (W&B trial
+    number, hidden_dims, learning rate); the fixed settings (in-degree, card,
+    ...) are in the sweep's name and every run's config.
     n_jobs, device, torch_threads : speed settings, see _parallel_map. The
     cells are fitted in parallel; all W&B logging stays in this process.
     """
@@ -557,10 +558,15 @@ def sweep_trial(k_values, n_dags, n_nodes, alpha, sample_sizes, card, val_frac,
 
     run = wandb.init()
     config = dict(run.config)
-    # short display name, e.g. "k10_128_64_3"; the number is W&B's trial number
-    # (its auto name ends in it: "genial-sweep-3"). Settings are in the config.
+    # short display name, e.g. "07_256x128_lr3e-4": W&B's trial number (its
+    # auto name ends in it: "genial-sweep-7"), zero-padded so names sort in
+    # trial order, then the architecture and learning rate. Other settings are
+    # in the config.
     trial_no = run.name.rsplit("-", 1)[-1] if run.name else run.id
-    run.name = f"k{'_'.join(map(str, k_values))}_{config['hidden_dims']}_{trial_no}"
+    trial_no = f"{int(trial_no):02d}" if trial_no.isdigit() else trial_no
+    mantissa, exponent = f"{config.get('lr', NN_HPARAMS['lr']):.0e}".split("e")
+    run.name = (f"{trial_no}_{str(config['hidden_dims']).replace('_', 'x')}"
+                f"_lr{mantissa}e{int(exponent)}")
     # fixed settings, so W&B can filter / group runs by them (not sweep
     # parameters, so the search ignores them)
     run.config.update({**settings, "code_version": code_version()},
