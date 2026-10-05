@@ -247,7 +247,42 @@ def _shared_value(top, c):
     return str(v)
 
 
-def summarise_trials(trials, n_se=1.0, show=True, **filters):
+def _group_trials(s, cols, group_over):
+    """Merge trials (rows of s, indexed by run_id) that differ only in the
+    group_over settings: one row per group, averaged. lr is rounded to 1
+    significant figure for grouping, so continuously sampled values can group.
+    mean_kl / mean_val_loss / extras and kl_se are means, n_trials counts the
+    group, run_name / run_id are the group's best trial, and the group_over
+    columns are dropped. kl_se is the mean of the trials' kl_se, not
+    sqrt(sum se^2) / n: every trial is evaluated on the same DAGs and test
+    rows, so their errors are strongly correlated and averaging them removes
+    far less noise than independent errors would (the true SE of the average
+    lies between se / sqrt(n) and se). Using the mean keeps grouped rows'
+    within-n_se window comparable to single trials'."""
+    s = s.reset_index()
+    keys = [c for c in cols if c not in group_over]
+    for c in keys:
+        if c in _ROUNDED:
+            s[c] = s[c].map(_round_sig)
+    rows = []
+    for _, g in s.groupby(keys, dropna=False, sort=False):
+        best = g.loc[g["mean_kl"].idxmin()]
+        row = {"run_id": best["run_id"], "run_name": best["run_name"],
+               "mean_kl": g["mean_kl"].mean(),
+               "kl_se": g["kl_se"].mean(),     # errors are correlated; see docstring
+               "mean_val_loss": g["mean_val_loss"].mean(),
+               "n_dags": best["n_dags"], "n_trials": len(g),
+               **{c: best[c] for c in keys}}
+        for c in ["stored_params", "best_epoch_mean", "fit_time_s"]:
+            if c in g:
+                row[c] = g[c].mean()
+        if "sweep_id" in g:
+            row["sweep_id"] = ", ".join(map(str, dict.fromkeys(g["sweep_id"].dropna()))) or np.nan
+        rows.append(row)
+    return pd.DataFrame(rows).set_index("run_id")
+
+
+def summarise_trials(trials, n_se=1.0, group_over=(), show=True, **filters):
     """Per (in_degree, sample_size): the trials within n_se kl_se of the best.
 
     trials  : the per-cell trial CSV(s) (one row per trial x dag x sample size).
@@ -259,6 +294,14 @@ def summarise_trials(trials, n_se=1.0, show=True, **filters):
     that mean from the test-row Monte Carlo error. Trials with fewer DAGs than
     the most complete one in that pair are dropped. The best trial is the
     lowest mean_kl; a trial is kept if mean_kl <= best mean_kl + n_se * best kl_se.
+    group_over : settings with negligible effect (e.g. ("weight_decay",)).
+              Trials that differ only in these (lr rounded to 1 significant
+              figure) are averaged into one row before the threshold is
+              applied: mean_kl, kl_se and the other metrics are means
+              (kl_se not shrunk by sqrt(n): the trials share DAGs and test
+              rows, so their errors are correlated), n_trials counts the
+              group, run_name is its best trial, and the group_over columns
+              are dropped.
     Prints one table per pair when show=True, and returns
     {(in_degree, sample_size): DataFrame}, best first. Printed tables round
     lr / weight_decay to 1 significant figure and hide
@@ -293,15 +336,20 @@ def summarise_trials(trials, n_se=1.0, show=True, **filters):
             **{c: (c, "first") for c in hp},
             **{c: (c, "mean") for c in extra},
             **({"sweep_id": ("sweep_id", "first")} if "sweep_id" in g else {}))
-        s = s[s["n_dags"] == s["n_dags"].max()].sort_values("mean_kl")
+        s = s[s["n_dags"] == s["n_dags"].max()]
+        if group_over:
+            s = _group_trials(s, hp, group_over)
+        s = s.sort_values("mean_kl")
         best = s.iloc[0]
         top = s[s["mean_kl"] <= best["mean_kl"] + n_se * best["kl_se"]].reset_index()
         top.attrs["hidden"] = hidden        # for shared_settings_table
         top.attrs["n_se"] = n_se            # threshold, reported downstream
+        top.attrs["group_over"] = tuple(group_over)
         tables[(k, n)] = top
         if show:
+            grouped = f" (grouped over {', '.join(group_over)})" if group_over else ""
             print(f"in-degree {k}, N = {n}: best {best['mean_kl']:.4f} ± {best['kl_se']:.4f}"
-                  f" -> {len(top)} of {len(s)} configs within {n_se:g} kl_se")
+                  f" -> {len(top)} of {len(s)} configs{grouped} within {n_se:g} kl_se")
             _show(_for_display(top.drop(columns=[c for c in hidden if c in top])))
     return tables
 
@@ -376,7 +424,7 @@ def common_configs(tables, match_on=("hidden_dims", "dropout", "patience", "batc
     return out
 
 
-def top_config_values(tables, snap=(("weight_decay", (1, 5)),), show=True):
+def top_config_values(tables, snap=(), fixed=None, show=True):
     """Every top config (from summarise_trials) once, with its settings.
 
     lr and weight_decay are rounded to 1 significant figure (0.000302 and
@@ -385,6 +433,10 @@ def top_config_values(tables, snap=(("weight_decay", (1, 5)),), show=True):
     ..., 1e-4, 5e-4, 1e-3, 5e-3, 1e-2, ... (nearest in log space, so 0.005 and
     0.006 both become 0.005). snap=() uses plain rounding. Configs that become
     identical are merged into one row.
+    fixed : settings to use for every config, e.g. {"weight_decay": 0.01} when
+    summarise_trials grouped over weight decay; they're added to (or replace
+    the value in) every returned row, so arms_from_configs runs them, and are
+    hidden in the printed table.
     Columns: run_name / run_id of the merged row's best trial (lowest
     mean_kl relative to its table's best; used to name the arm), in_tables
     (every in-degree / sample size table any of its trials is top in),
@@ -393,6 +445,7 @@ def top_config_values(tables, snap=(("weight_decay", (1, 5)),), show=True):
     arms_from_configs), with the rounded / snapped values.
     """
     grids = dict(snap)
+    fixed = dict(fixed or {})
     rows = {}
     for (k, n), top in tables.items():
         cols = [c for c in _HPARAM_COLS if c in top]
@@ -400,31 +453,36 @@ def top_config_values(tables, snap=(("weight_decay", (1, 5)),), show=True):
         for _, r in top.iterrows():
             settings = {c: (_snap(r[c], grids[c]) if c in grids
                             else _round_sig(r[c]) if c in _ROUNDED else r[c]) for c in cols}
+            settings.update(fixed)
             key = tuple(str(v) for v in settings.values())
             regret = r["mean_kl"] / best_kl - 1
             entry = rows.setdefault(key, {"run_id": r["run_id"], "run_name": r["run_name"],
-                                          "_regret": regret, "tables": [], "trials": set(),
+                                          "_regret": regret, "tables": [], "trials": {},
                                           **settings})
             if regret < entry["_regret"]:      # label the row with its best trial
                 entry.update(run_id=r["run_id"], run_name=r["run_name"], _regret=regret)
             if f"k{k} N{n}" not in entry["tables"]:
                 entry["tables"].append(f"k{k} N{n}")
-            entry["trials"].add(r["run_id"])
+            # sweep trials behind this row (grouped rows already average several)
+            entry["trials"][r["run_id"]] = int(r["n_trials"]) if "n_trials" in r else 1
     out = pd.DataFrame(list(rows.values()))
     if out.empty:
         return out
     out = out.drop(columns="_regret")
-    out.insert(2, "n_trials", out.pop("trials").map(len))
+    out.insert(2, "n_trials", out.pop("trials").map(lambda d: sum(d.values())))
     out.insert(2, "n_tables", out["tables"].map(len))
     out.insert(2, "in_tables", out.pop("tables").map(", ".join))
     out = (out.sort_values(["n_tables", "n_trials", "run_name"], ascending=[False, False, True])
            .reset_index(drop=True))
     if show:
         how = [f"{c} snapped to {'-'.join(map(str, g))} grid" for c, g in grids.items()]
-        how += [f"{c} rounded to 1 significant figure" for c in _ROUNDED if c not in grids]
+        how += [f"{c} rounded to 1 significant figure" for c in _ROUNDED
+                if c not in grids and c not in fixed]
+        how += [f"{c} fixed at {v:g} for runs" for c, v in fixed.items()]
         print(f"top configs ({_threshold(tables)}), {'; '.join(how)}, identical configs merged:")
         # optimizer / n_epochs stay in the returned table (arms_from_configs needs them)
-        _show(out.drop(columns=[c for c in ["run_id", "optimizer", "n_epochs"] if c in out]))
+        _show(out.drop(columns=[c for c in ["run_id", "optimizer", "n_epochs", *fixed]
+                                if c in out]))
     return out
 
 
