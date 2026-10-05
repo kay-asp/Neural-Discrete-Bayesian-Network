@@ -188,6 +188,17 @@ _HPARAM_COLS = ["hidden_dims", "activation", "lr", "weight_decay", "dropout",
 TRIAL_DEFAULTS = {"card": 2, "val_frac": 0.2, "n_test": 10000, "activation": "ReLU"}
 
 
+def load_trials(results_dir):
+    """All hyperparameter-sweep trial rows in results_dir: hparam_trials.csv
+    (every sweep) plus any older hparam_trials_*.csv files, concatenated."""
+    from glob import glob
+    import os
+    files = sorted(glob(os.path.join(results_dir, "hparam_trials*.csv")))
+    if not files:
+        raise FileNotFoundError(f"no hparam_trials*.csv in {results_dir}")
+    return pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+
+
 def _show(df):
     """Display a table nicely in a notebook, or print it elsewhere."""
     try:
