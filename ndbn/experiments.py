@@ -1,4 +1,5 @@
 """Experiment grid (MLE vs neural CPDs) and the hyperparameter sweep."""
+import ast
 import logging
 import os
 import subprocess
@@ -638,3 +639,33 @@ def _rename_wandb_run(entity, project, run_id, name):
     except Exception as e:
         print(f"W&B rename of run {run_id} to {name!r} failed ({e}); "
               "the CSV's run_name/run_id still identify it")
+
+
+def arms_from_configs(configs):
+    """Rows of settings (e.g. plotting.top_config_values output) -> run_sweep arms.
+
+    Each row needs run_name and hidden_dims ("[256, 128]" or a tuple); any of
+    activation ("ReLU", "linear", ...), lr, weight_decay, dropout, patience,
+    batch_size, optimizer and n_epochs present (and not missing) are passed on.
+    Arm names must be unique (they label rows and history files), so a
+    run_name that repeats (trial numbers restart in every sweep) gets the
+    first characters of its run_id appended.
+    """
+    by_name = {cls.__name__: cls for cls in ACTIVATIONS.values()}
+    ints = ("patience", "batch_size", "n_epochs")
+    repeated = configs["run_name"].duplicated(keep=False)
+    arms = []
+    for i, r in configs.iterrows():
+        hd = r["hidden_dims"]
+        hd = tuple(ast.literal_eval(hd)) if isinstance(hd, str) else tuple(hd)
+        act = r.get("activation", "ReLU")
+        name = str(r["run_name"])
+        if repeated.loc[i] and "run_id" in r:
+            name = f"{name}_{str(r['run_id'])[:4]}"
+        arm = {"name": name, "hidden_dims": hd,
+               "activation": None if (not hd or act == "linear") else by_name.get(act, nn.ReLU)}
+        for c in ("lr", "weight_decay", "dropout", "patience", "batch_size", "optimizer", "n_epochs"):
+            if c in r and pd.notna(r[c]):
+                arm[c] = int(r[c]) if c in ints else r[c]
+        arms.append(arm)
+    return arms

@@ -205,8 +205,25 @@ def _round_sig(x, sig=1):
         return x
 
 
-def summarise_trials(trials, show=True, **filters):
-    """Per (in_degree, sample_size): the trials within 1 kl_se of the best.
+_ROUNDED = ("lr", "weight_decay")
+
+
+def _shared_value(top, c):
+    """The value of column c shared by every row of `top` as text, or "–" if
+    the rows differ. lr / weight_decay are rounded to 1 significant figure
+    first and shown like run names ("≈3e-4")."""
+    vals = top[c].map(_round_sig) if c in _ROUNDED else top[c]
+    if vals.nunique(dropna=False) != 1:
+        return "–"
+    v = vals.iloc[0]
+    if c in _ROUNDED:
+        mantissa, exponent = f"{v:.0e}".split("e")
+        return f"≈{mantissa}e{int(exponent)}"
+    return str(v)
+
+
+def summarise_trials(trials, n_se=1.0, show=True, **filters):
+    """Per (in_degree, sample_size): the trials within n_se kl_se of the best.
 
     trials  : the per-cell trial CSV(s) (one row per trial x dag x sample size).
     filters : any column = value, e.g. card=2, alpha=0.5, sweep_id="abc123".
@@ -216,9 +233,12 @@ def summarise_trials(trials, show=True, **filters):
     and kl_se = sqrt(sum of per-cell kl_se^2) / n_cells, the standard error of
     that mean from the test-row Monte Carlo error. Trials with fewer DAGs than
     the most complete one in that pair are dropped. The best trial is the
-    lowest mean_kl; a trial is kept if mean_kl <= best mean_kl + best kl_se.
+    lowest mean_kl; a trial is kept if mean_kl <= best mean_kl + n_se * best kl_se.
     Prints one table per pair when show=True, and returns
-    {(in_degree, sample_size): DataFrame}, best first.
+    {(in_degree, sample_size): DataFrame}, best first. Printed tables hide
+    run_id, n_dags and settings that are constant across all trials; the
+    returned tables keep every column. Use shared_settings_table(tables) for
+    the settings each table's rows have in common.
     """
     t = trials.copy()
     for col, val in filters.items():
@@ -233,6 +253,9 @@ def summarise_trials(trials, show=True, **filters):
 
     hp = [c for c in _HPARAM_COLS if c in t]
     extra = [c for c in ["stored_params", "best_epoch_mean", "fit_time_s"] if c in t]
+    # display only: identifiers and settings that never vary carry no information
+    hidden = ["run_id", "n_dags"] + [c for c in [*hp, "sweep_id"]
+                                     if c in t and t[c].nunique(dropna=False) <= 1]
     tables = {}
     for (k, n), g in t.groupby(["in_degree", "sample_size"]):
         s = g.groupby("run_id").agg(
@@ -246,18 +269,53 @@ def summarise_trials(trials, show=True, **filters):
             **({"sweep_id": ("sweep_id", "first")} if "sweep_id" in g else {}))
         s = s[s["n_dags"] == s["n_dags"].max()].sort_values("mean_kl")
         best = s.iloc[0]
-        top = s[s["mean_kl"] <= best["mean_kl"] + best["kl_se"]].reset_index()
+        top = s[s["mean_kl"] <= best["mean_kl"] + n_se * best["kl_se"]].reset_index()
+        top.attrs["hidden"] = hidden        # for shared_settings_table
+        top.attrs["n_se"] = n_se            # threshold, reported downstream
         tables[(k, n)] = top
         if show:
             print(f"in-degree {k}, N = {n}: best {best['mean_kl']:.4f} ± {best['kl_se']:.4f}"
-                  f" -> {len(top)} of {len(s)} configs within 1 kl_se")
-            _show(top.round(4))
+                  f" -> {len(top)} of {len(s)} configs within {n_se:g} kl_se")
+            _show(top.drop(columns=[c for c in hidden if c in top]).round(4))
     return tables
+
+
+def _threshold(tables):
+    """'within N kl_se' for the tables' threshold (as set in summarise_trials)."""
+    n_se = next(iter(tables.values())).attrs.get("n_se", 1.0) if tables else 1.0
+    return f"within {n_se:g} kl_se"
+
+
+def shared_settings_table(tables, show=True):
+    """One row per summarise_trials table: the settings every one of its top
+    configs has in common.
+
+    Columns: in_degree, sample_size, n_top, then one per setting. A cell holds
+    the value all of that table's top configs share ("–" if they differ;
+    lr / weight_decay rounded to 1 significant figure, "≈3e-4"). Settings
+    that never vary across all trials are left out. Read down a column to
+    see whether a setting agrees across in-degrees and sample sizes.
+    """
+    if not tables:
+        return pd.DataFrame()
+    hidden = set(next(iter(tables.values())).attrs.get("hidden", []))
+    cols = [c for c in _HPARAM_COLS
+            if c not in hidden and all(c in top for top in tables.values())]
+    rows = [{"in_degree": k, "sample_size": n, "n_top": len(top),
+             **{c: _shared_value(top, c) for c in cols}}
+            for (k, n), top in tables.items()]
+    out = pd.DataFrame(rows)
+    if show:
+        print(f"settings shared by all top configs ({_threshold(tables)}) of each table "
+              "(– = they differ; n_top = 1 means a single config)")
+        _show(out)
+    return out
 
 
 def common_configs(tables, match_on=("hidden_dims", "dropout", "patience", "batch_size"),
                    round_cols=("lr", "weight_decay"), min_tables=2, show=True):
-    """Configs in the top (within 1 kl_se) of more than one summarise_trials table.
+    """Configs in the top (within n_se kl_se, as set in summarise_trials) of
+    more than one summarise_trials table.
 
     tables     : the dict returned by summarise_trials.
     match_on   : setting columns that define "the same config". Continuous
@@ -286,7 +344,59 @@ def common_configs(tables, match_on=("hidden_dims", "dropout", "patience", "batc
     out = (out[out["n_tables"] >= min_tables]
            .sort_values(["n_tables", "n_trials"], ascending=False).reset_index(drop=True))
     if show:
-        print(f"configs (matched on {', '.join(match_on)}) in the top of "
-              f">= {min_tables} of {len(tables)} tables: {len(out)}")
+        print(f"configs (matched on {', '.join(match_on)}) in the top "
+              f"({_threshold(tables)}) of >= {min_tables} of {len(tables)} tables: {len(out)}")
         _show(out)
+    return out
+
+
+def top_config_values(tables, show=True):
+    """Every top config (from summarise_trials) once, with its full settings.
+
+    One row per trial that is in the top of at least one table: run_name,
+    in_tables (which in-degree / sample size tables), n_tables, then every
+    setting at full precision (nothing hidden or rounded), so a row is
+    exactly what's needed to run that config again (see arms_from_configs).
+    """
+    rows = {}
+    for (k, n), top in tables.items():
+        for _, r in top.iterrows():
+            entry = rows.setdefault(r["run_id"], {
+                "run_id": r["run_id"], "run_name": r["run_name"], "tables": [],
+                **{c: r[c] for c in _HPARAM_COLS if c in top}})
+            entry["tables"].append(f"k{k} N{n}")
+    out = pd.DataFrame(list(rows.values()))
+    if out.empty:
+        return out
+    out.insert(2, "n_tables", out["tables"].map(len))
+    out.insert(2, "in_tables", out.pop("tables").map(", ".join))
+    out = out.sort_values(["n_tables", "run_name"], ascending=[False, True]).reset_index(drop=True)
+    if show:
+        print(f"top configs ({_threshold(tables)}), full settings:")
+        _show(out.drop(columns="run_id"))
+    return out
+
+
+def candidate_table(results, show=True):
+    """Compare chosen configs run on every (in-degree, sample size).
+
+    results : run_sweep output (rows with arm, in_degree, sample_size, dag_idx,
+              kl). Duplicates from re-running are dropped, keeping the latest.
+    One row per arm: mean KL over DAGs for each (k, N) ("kl k6 N600"), its
+    regret % relative to the best arm in that (k, N) ("regret k6 N600"), and
+    worst_% (largest regret over all pairs). Sorted by worst_%.
+    """
+    r = results.drop_duplicates(["arm", "in_degree", "sample_size", "dag_idx"], keep="last")
+    kl = r.pivot_table(index="arm", columns=["in_degree", "sample_size"], values="kl", aggfunc="mean")
+    regret = 100 * (kl / kl.min() - 1)
+    label = lambda kn: f"k{kn[0]} N{kn[1]}"
+    out = pd.concat([kl.set_axis([f"kl {label(c)}" for c in kl.columns], axis=1),
+                     regret.set_axis([f"regret {label(c)}" for c in regret.columns], axis=1)],
+                    axis=1)
+    out["worst_%"] = regret.max(axis=1)
+    out = out.sort_values("worst_%").reset_index()
+    if show:
+        print("chosen configs on every (in-degree, sample size): mean KL over tuning DAGs and "
+              "regret % vs the best config in each pair")
+        _show(out.round(4))
     return out
