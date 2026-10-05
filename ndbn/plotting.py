@@ -208,6 +208,16 @@ def _round_sig(x, sig=1):
 _ROUNDED = ("lr", "weight_decay")
 
 
+def _for_display(df):
+    """Round for printing: 4 decimals, but lr / weight_decay to 1 significant
+    figure (4 decimals would turn a weight decay of 2e-5 into 0)."""
+    out = df.round(4)
+    for c in _ROUNDED:
+        if c in df:
+            out[c] = df[c].map(_round_sig)
+    return out
+
+
 def _shared_value(top, c):
     """The value of column c shared by every row of `top` as text, or "–" if
     the rows differ. lr / weight_decay are rounded to 1 significant figure
@@ -235,7 +245,8 @@ def summarise_trials(trials, n_se=1.0, show=True, **filters):
     the most complete one in that pair are dropped. The best trial is the
     lowest mean_kl; a trial is kept if mean_kl <= best mean_kl + n_se * best kl_se.
     Prints one table per pair when show=True, and returns
-    {(in_degree, sample_size): DataFrame}, best first. Printed tables hide
+    {(in_degree, sample_size): DataFrame}, best first. Printed tables round
+    lr / weight_decay to 1 significant figure and hide
     run_id, n_dags and settings that are constant across all trials; the
     returned tables keep every column. Use shared_settings_table(tables) for
     the settings each table's rows have in common.
@@ -276,7 +287,7 @@ def summarise_trials(trials, n_se=1.0, show=True, **filters):
         if show:
             print(f"in-degree {k}, N = {n}: best {best['mean_kl']:.4f} ± {best['kl_se']:.4f}"
                   f" -> {len(top)} of {len(s)} configs within {n_se:g} kl_se")
-            _show(top.drop(columns=[c for c in hidden if c in top]).round(4))
+            _show(_for_display(top.drop(columns=[c for c in hidden if c in top])))
     return tables
 
 
@@ -351,29 +362,41 @@ def common_configs(tables, match_on=("hidden_dims", "dropout", "patience", "batc
 
 
 def top_config_values(tables, show=True):
-    """Every top config (from summarise_trials) once, with its full settings.
+    """Every top config (from summarise_trials) once, with its settings.
 
-    One row per trial that is in the top of at least one table: run_name,
-    in_tables (which in-degree / sample size tables), n_tables, then every
-    setting at full precision (nothing hidden or rounded), so a row is
-    exactly what's needed to run that config again (see arms_from_configs).
+    lr and weight_decay are rounded to 1 significant figure (0.000302 and
+    0.00031 -> 0.0003; 0.0213 -> 0.02), and configs that become identical
+    after rounding are merged into one row. Columns: run_name / run_id (of the
+    first, best-ranked trial; used to name the arm), in_tables (every
+    in-degree / sample size table any of its trials is top in), n_tables,
+    n_trials (sweep trials merged into the row), then every setting. A row is
+    what's needed to run that config again (see arms_from_configs), with the
+    rounded lr / weight_decay.
     """
     rows = {}
     for (k, n), top in tables.items():
+        cols = [c for c in _HPARAM_COLS if c in top]
         for _, r in top.iterrows():
-            entry = rows.setdefault(r["run_id"], {
-                "run_id": r["run_id"], "run_name": r["run_name"], "tables": [],
-                **{c: r[c] for c in _HPARAM_COLS if c in top}})
-            entry["tables"].append(f"k{k} N{n}")
+            settings = {c: (_round_sig(r[c]) if c in _ROUNDED else r[c]) for c in cols}
+            key = tuple(str(v) for v in settings.values())
+            entry = rows.setdefault(key, {"run_id": r["run_id"], "run_name": r["run_name"],
+                                          "tables": [], "trials": set(), **settings})
+            if f"k{k} N{n}" not in entry["tables"]:
+                entry["tables"].append(f"k{k} N{n}")
+            entry["trials"].add(r["run_id"])
     out = pd.DataFrame(list(rows.values()))
     if out.empty:
         return out
+    out.insert(2, "n_trials", out.pop("trials").map(len))
     out.insert(2, "n_tables", out["tables"].map(len))
     out.insert(2, "in_tables", out.pop("tables").map(", ".join))
-    out = out.sort_values(["n_tables", "run_name"], ascending=[False, True]).reset_index(drop=True)
+    out = (out.sort_values(["n_tables", "n_trials", "run_name"], ascending=[False, False, True])
+           .reset_index(drop=True))
     if show:
-        print(f"top configs ({_threshold(tables)}), full settings:")
-        _show(out.drop(columns="run_id"))
+        print(f"top configs ({_threshold(tables)}), lr / weight_decay rounded to 1 significant "
+              "figure, identical configs merged:")
+        # optimizer / n_epochs stay in the returned table (arms_from_configs needs them)
+        _show(out.drop(columns=[c for c in ["run_id", "optimizer", "n_epochs"] if c in out]))
     return out
 
 
