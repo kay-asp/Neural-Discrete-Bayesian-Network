@@ -640,6 +640,29 @@ def sweep_trial(k_values, n_dags, n_nodes, alpha, sample_sizes, card, val_frac,
     return metrics
 
 
+def _resolve_sweep(sweep_id, project):
+    """(entity, project, sweep id) of an existing W&B sweep, looked up with
+    W&B's API so runs can be attached to it under the right entity/project.
+    sweep_id is "id", "project/id" or "entity/project/id"; a bare id is looked
+    for in `project` under the default entity."""
+    import wandb
+    parts = str(sweep_id).split("/")
+    api = wandb.Api()
+    if len(parts) == 1:
+        path = f"{api.default_entity}/{project}/{parts[0]}"
+    elif len(parts) == 2:
+        path = f"{api.default_entity}/{parts[0]}/{parts[1]}"
+    else:
+        path = "/".join(parts[-3:])
+    try:
+        sweep = api.sweep(path)
+    except Exception as e:
+        raise ValueError(
+            f"W&B sweep {sweep_id!r} not found at {path!r} ({e}). Check the id on the sweep's page, "
+            "or give it in full as 'entity/project/sweep_id'.") from None
+    return sweep.entity, sweep.project, sweep.id
+
+
 def run_configs(configs, k_values, n_dags, n_nodes, alpha, sample_sizes, card, val_frac,
                 results_dir, n_cached, n_test, trial_csv, dag_offset=0,
                 wandb_project=None, sweep_ids=None, tag="candidate", source="candidates",
@@ -655,7 +678,9 @@ def run_configs(configs, k_values, n_dags, n_nodes, alpha, sample_sizes, card, v
     its rows are appended to trial_csv (hparam_trials.csv) in the same format
     as sweep trials, with source=`source` (sweep trials have "sweep"), so the
     sweep summaries include them and candidate_table can pick them out.
-    sweep_ids : {in_degree: W&B sweep id}, e.g. {6: "ey794fwc", 10: "p8lmbfxj"}.
+    sweep_ids : {in_degree: W&B sweep id}, e.g. {6: "ey794fwc", 10: "p8lmbfxj"}
+              ("id", "project/id" or "entity/project/id"; looked up with W&B's
+              API first, so runs use the sweep's own entity and project).
               Each config then runs once per in-degree (like sweep trials), and
               each run is added to that in-degree's sweep (via WANDB_SWEEP_ID,
               as W&B's agent does) and its rows get that sweep_id. Without it,
@@ -675,6 +700,9 @@ def run_configs(configs, k_values, n_dags, n_nodes, alpha, sample_sizes, card, v
         raise ValueError(f"config names must be unique: {names}")
     sweep_ids = dict(sweep_ids or {})
     groups = [[k] for k in k_values] if sweep_ids else [list(k_values)]
+    # look every sweep up first, so a wrong id fails before any training
+    where = {k: _resolve_sweep(sid, wandb_project) for k, sid in sweep_ids.items()
+             if wandb_project is not None and k in k_values}
 
     # (config name, in-degree) pairs already complete in the tuning data
     have = {}
@@ -696,7 +724,8 @@ def run_configs(configs, k_values, n_dags, n_nodes, alpha, sample_sizes, card, v
             if all(have.get((name, k), 0) >= n_dags * len(sample_sizes) for k in ks):
                 tqdm.write(f"{name} k={ks}: already in {os.path.basename(trial_csv)}, skipped")
                 continue
-            sweep_id = sweep_ids.get(ks[0]) if len(ks) == 1 else None
+            sweep = where.get(ks[0]) if len(ks) == 1 else None     # (entity, project, id)
+            sweep_id = sweep[2] if sweep else (sweep_ids.get(ks[0]) if len(ks) == 1 else None)
             settings = {"k_values": str(ks), "n_dags": n_dags, "n_nodes": n_nodes,
                         "alpha": alpha, "sample_sizes": str(list(sample_sizes)), "card": card,
                         "val_frac": val_frac, "n_cached": n_cached, "n_test": n_test,
@@ -706,21 +735,25 @@ def run_configs(configs, k_values, n_dags, n_nodes, alpha, sample_sizes, card, v
             run = None
             if wandb_project is not None:
                 import wandb
-                prev = os.environ.get("WANDB_SWEEP_ID")
-                if sweep_id:
-                    os.environ["WANDB_SWEEP_ID"] = sweep_id     # attach the run to this sweep
+                env = ("WANDB_SWEEP_ID", "WANDB_ENTITY", "WANDB_PROJECT")
+                prev = {v: os.environ.get(v) for v in env}
+                if sweep:      # attach the run to this sweep, as W&B's agent does
+                    os.environ.update(dict(zip(env, (sweep[2], sweep[0], sweep[1]))))
                 try:
                     run = wandb.init(
-                        project=wandb_project, name=name, tags=[tag], reinit=True,
+                        entity=sweep[0] if sweep else None,
+                        project=sweep[1] if sweep else wandb_project,
+                        name=name, tags=[tag], reinit=True,
                         config={**settings, "code_version": code_version(), **kw,
                                 "hidden_dims": "_".join(map(str, hidden_dims)) or "linear",
                                 "activation": "linear" if activation is None
                                               else activation.__name__})
                 finally:
-                    if prev is None:
-                        os.environ.pop("WANDB_SWEEP_ID", None)
-                    else:
-                        os.environ["WANDB_SWEEP_ID"] = prev
+                    for v, old in prev.items():
+                        if old is None:
+                            os.environ.pop(v, None)
+                        else:
+                            os.environ[v] = old
             run_id = run.id if run is not None else uuid.uuid4().hex[:8]
             metrics = _score_config(
                 run, run_id, name, sweep_id, source, settings, hidden_dims, activation, kw,
