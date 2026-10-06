@@ -509,24 +509,32 @@ def top_config_values(tables, snap=None, fixed=None, show=True):
     return out
 
 
-def candidate_table(results, show=True):
+def candidate_table(trials, source="candidates", show=True):
     """Compare chosen configs run on every (in-degree, sample size).
 
-    results : run_sweep output (rows with arm, in_degree, sample_size, dag_idx,
-              kl). Duplicates from re-running are dropped, keeping the latest.
-    One row per arm: mean KL over DAGs for each (k, N) ("kl k6 N600"), its
-    regret % relative to the best arm in that (k, N) ("regret k6 N600"), and
-    worst_% (largest regret over all pairs). Sorted by worst_%.
+    trials : the tuning data (load_trials(RESULTS_DIR)); the rows with
+             source=`source` (written by experiments.run_configs) are used,
+             labelled by run_name. Duplicates from re-running are dropped,
+             keeping the latest.
+    One row per config: mean KL over DAGs for each (k, N) ("kl k6 N600"), its
+    regret % relative to the best config in that (k, N) ("regret k6 N600"),
+    and worst_% (largest regret over all pairs). Sorted by worst_%.
     """
-    r = results.drop_duplicates(["arm", "in_degree", "sample_size", "dag_idx"], keep="last")
-    kl = r.pivot_table(index="arm", columns=["in_degree", "sample_size"], values="kl", aggfunc="mean")
+    if "source" not in trials:
+        return pd.DataFrame()
+    r = trials[trials["source"] == source]
+    if r.empty:
+        return pd.DataFrame()
+    r = r.drop_duplicates(["run_name", "in_degree", "sample_size", "dag_idx"], keep="last")
+    kl = r.pivot_table(index="run_name", columns=["in_degree", "sample_size"], values="kl",
+                       aggfunc="mean")
     regret = 100 * (kl / kl.min() - 1)
     label = lambda kn: f"k{kn[0]} N{kn[1]}"
     out = pd.concat([kl.set_axis([f"kl {label(c)}" for c in kl.columns], axis=1),
                      regret.set_axis([f"regret {label(c)}" for c in regret.columns], axis=1)],
                     axis=1)
     out["worst_%"] = regret.max(axis=1)
-    out = out.sort_values("worst_%").reset_index()
+    out = out.sort_values("worst_%").reset_index().rename(columns={"run_name": "config"})
     if show:
         print("chosen configs on every (in-degree, sample size): mean KL over tuning DAGs and "
               "regret % vs the best config in each pair")

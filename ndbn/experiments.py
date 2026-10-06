@@ -518,6 +518,58 @@ def _trial_cell(job, hidden_dims, activation, kw, card, val_frac, results_dir,
     }
 
 
+def _score_config(run, run_id, run_name, sweep_id, source, settings, hidden_dims,
+                  activation, kw, k_values, n_dags, n_nodes, alpha, sample_sizes, card,
+                  val_frac, results_dir, n_cached, n_test, trial_csv, dag_offset,
+                  n_jobs, device, torch_threads):
+    """Fit one config on every (k, dag, sample size) cell, append one row per
+    cell to trial_csv, log summaries to the W&B run (if any) and return them.
+    Shared by sweep_trial (W&B sweep trials) and run_configs (chosen configs),
+    so both write the same rows to the same tuning data."""
+    jobs = []
+    for k in k_values:
+        for dag in range(dag_offset + 1, dag_offset + n_dags + 1):
+            load_dag(results_dir, dag, k, n_nodes, alpha, card, n_cached, n_test)  # cache once
+            jobs += [{"k": k, "dag": dag, "samples": s, "n_nodes": n_nodes, "alpha": alpha}
+                     for s in sample_sizes]
+
+    run_cell = partial(_trial_cell, hidden_dims=hidden_dims, activation=activation,
+                       kw=kw, card=card, val_frac=val_frac, results_dir=results_dir,
+                       n_cached=n_cached, n_test=n_test)
+    rows = list(_parallel_map(run_cell, jobs, n_jobs, device, torch_threads))
+    rows.sort(key=lambda r: (r["in_degree"], r["dag_idx"], r["sample_size"]))
+
+    for r in rows:
+        # settings first, then the cell's own columns (they win on a clash,
+        # e.g. the cell's sample_size over the trial's sample_sizes list)
+        r.update({**{x: v for x, v in settings.items() if x not in r},
+                  "run_id": run_id, "run_name": run_name, "sweep_id": sweep_id,
+                  "source": source, "n_cells": len(rows)})
+
+    cells = pd.DataFrame(rows)
+    metrics = {
+        "mean_val_loss": float(cells["val_loss"].mean()),
+        "mean_kl": float(cells["kl"].mean()),
+        # spread across DAGs: std of each DAG's KL averaged over sample sizes
+        "std_kl": float(cells.groupby(["in_degree", "dag_idx"])["kl"].mean().std()),
+        "frac_at_ceiling": float(cells["frac_at_ceiling"].mean()),
+    }
+    if run is not None:
+        # per sample size (mean over DAGs): one logged step per N, with
+        # sample_size as the x-axis, so W&B plots mean_kl against sample_size
+        run.define_metric("sample_size")
+        for m in ("mean_kl", "mean_val_loss"):
+            run.define_metric(m, step_metric="sample_size")
+        for n, g in cells.groupby("sample_size"):
+            run.log({"sample_size": int(n), "mean_kl": float(g["kl"].mean()),
+                     "mean_val_loss": float(g["val_loss"].mean())})
+        # run summary = the objectives over every cell; set after the per-N
+        # steps so it isn't left at the last sample size's value
+        run.summary.update(metrics)
+    flush(rows, trial_csv)
+    return metrics
+
+
 def sweep_trial(k_values, n_dags, n_nodes, alpha, sample_sizes, card, val_frac,
                 results_dir, n_cached, n_test, trial_csv, dag_offset=0,
                 n_jobs=1, device=None, torch_threads=None):
@@ -578,51 +630,107 @@ def sweep_trial(k_values, n_dags, n_nodes, alpha, sample_sizes, card, val_frac,
     kw = {x: config[x] for x in NN_HPARAMS if x in config}
     kw.setdefault("n_epochs", NN_HPARAMS["n_epochs"])
 
-    jobs = []
-    for k in k_values:
-        for dag in range(dag_offset + 1, dag_offset + n_dags + 1):
-            load_dag(results_dir, dag, k, n_nodes, alpha, card, n_cached, n_test)  # cache once
-            jobs += [{"k": k, "dag": dag, "samples": s, "n_nodes": n_nodes, "alpha": alpha}
-                     for s in sample_sizes]
-
-    run_cell = partial(_trial_cell, hidden_dims=hidden_dims, activation=activation,
-                       kw=kw, card=card, val_frac=val_frac, results_dir=results_dir,
-                       n_cached=n_cached, n_test=n_test)
-    rows = list(_parallel_map(run_cell, jobs, n_jobs, device, torch_threads))
-    rows.sort(key=lambda r: (r["in_degree"], r["dag_idx"], r["sample_size"]))
-
-    for r in rows:
-        # settings first, then the cell's own columns (they win on a clash,
-        # e.g. the cell's sample_size over the trial's sample_sizes list)
-        r.update({**{x: v for x, v in settings.items() if x not in r},
-                  "run_id": run.id, "run_name": run.name, "sweep_id": sweep_id,
-                  "n_cells": len(rows)})
-
-    # Summaries only; per-cell values are in trial_csv.
-    cells = pd.DataFrame(rows)
-    # per sample size (mean over DAGs): one logged step per N, with sample_size
-    # as the x-axis, so W&B plots mean_kl against sample_size
-    run.define_metric("sample_size")
-    for m in ("mean_kl", "mean_val_loss"):
-        run.define_metric(m, step_metric="sample_size")
-    for n, g in cells.groupby("sample_size"):
-        run.log({"sample_size": int(n), "mean_kl": float(g["kl"].mean()),
-                 "mean_val_loss": float(g["val_loss"].mean())})
-    # run summary = the sweep's objectives, over every cell; set after the
-    # per-N steps so it isn't left at the last sample size's value
-    metrics = {
-        "mean_val_loss": float(cells["val_loss"].mean()),
-        "mean_kl": float(cells["kl"].mean()),
-        # spread across DAGs: std of each DAG's KL averaged over sample sizes
-        "std_kl": float(cells.groupby(["in_degree", "dag_idx"])["kl"].mean().std()),
-        "frac_at_ceiling": float(cells["frac_at_ceiling"].mean()),
-    }
-    run.summary.update(metrics)
+    metrics = _score_config(
+        run, run.id, run.name, sweep_id, "sweep", settings, hidden_dims, activation, kw,
+        k_values, n_dags, n_nodes, alpha, sample_sizes, card, val_frac, results_dir,
+        n_cached, n_test, trial_csv, dag_offset, n_jobs, device, torch_threads)
     where = (run.entity, run.project, run.id, run.name)   # read before finish()
     run.finish()
     _rename_wandb_run(*where)
-    flush(rows, trial_csv)
     return metrics
+
+
+def run_configs(configs, k_values, n_dags, n_nodes, alpha, sample_sizes, card, val_frac,
+                results_dir, n_cached, n_test, trial_csv, dag_offset=0,
+                wandb_project=None, sweep_ids=None, tag="candidate", source="candidates",
+                skip_existing=True, n_jobs=1, device=None, torch_threads=None):
+    """Run chosen configs exactly like sweep trials and add them to the tuning data.
+
+    configs : rows of plotting.top_config_values (e.g. top_values.loc[[0, 3]]),
+              or a list of dicts as run_sweep arms take them: "name", "hidden_dims"
+              (tuple), "activation" (nn class or None) and any NN_HPARAMS
+              (lr, weight_decay, dropout, patience, batch_size, optimizer,
+              n_epochs). Names must be unique.
+    Each config is fitted on every (k in k_values, dag, sample size) cell, and
+    its rows are appended to trial_csv (hparam_trials.csv) in the same format
+    as sweep trials, with source=`source` (sweep trials have "sweep"), so the
+    sweep summaries include them and candidate_table can pick them out.
+    sweep_ids : {in_degree: W&B sweep id}, e.g. {6: "ey794fwc", 10: "p8lmbfxj"}.
+              Each config then runs once per in-degree (like sweep trials), and
+              each run is added to that in-degree's sweep (via WANDB_SWEEP_ID,
+              as W&B's agent does) and its rows get that sweep_id. Without it,
+              one run covers all of k_values.
+    wandb_project : log each run to this W&B project (the sweeps' project),
+              tagged `tag`; None skips W&B.
+    skip_existing : skip a (config, in-degree) that already has rows from
+              `source` for every cell in trial_csv, so re-running only adds
+              what's missing. Returns one row of summary metrics per run.
+    """
+    import uuid
+
+    if isinstance(configs, pd.DataFrame):          # rows of plotting.top_config_values
+        configs = arms_from_configs(configs)
+    names = [c["name"] for c in configs]
+    if len(set(names)) != len(names):
+        raise ValueError(f"config names must be unique: {names}")
+    sweep_ids = dict(sweep_ids or {})
+    groups = [[k] for k in k_values] if sweep_ids else [list(k_values)]
+
+    # (config name, in-degree) pairs already complete in the tuning data
+    have = {}
+    if skip_existing and os.path.exists(trial_csv):
+        old = pd.read_csv(trial_csv)
+        if "source" in old:
+            old = old[(old["source"] == source) & old["sample_size"].isin(sample_sizes)]
+            have = (old.drop_duplicates(["run_name", "in_degree", "dag_idx", "sample_size"])
+                       .groupby(["run_name", "in_degree"]).size().to_dict())
+
+    results = []
+    for cfg in tqdm(configs, desc="configs"):
+        name = cfg["name"]
+        hidden_dims = tuple(cfg.get("hidden_dims", ()))
+        activation = cfg.get("activation", nn.ReLU) if hidden_dims else None
+        kw = {x: cfg[x] for x in NN_HPARAMS if x in cfg}
+        kw.setdefault("n_epochs", NN_HPARAMS["n_epochs"])
+        for ks in groups:
+            if all(have.get((name, k), 0) >= n_dags * len(sample_sizes) for k in ks):
+                tqdm.write(f"{name} k={ks}: already in {os.path.basename(trial_csv)}, skipped")
+                continue
+            sweep_id = sweep_ids.get(ks[0]) if len(ks) == 1 else None
+            settings = {"k_values": str(ks), "n_dags": n_dags, "n_nodes": n_nodes,
+                        "alpha": alpha, "sample_sizes": str(list(sample_sizes)), "card": card,
+                        "val_frac": val_frac, "n_cached": n_cached, "n_test": n_test,
+                        "dag_offset": dag_offset, "n_jobs": n_jobs, "device": device,
+                        "torch_threads": torch_threads,
+                        "in_degree": ks[0] if len(ks) == 1 else str(ks)}
+            run = None
+            if wandb_project is not None:
+                import wandb
+                prev = os.environ.get("WANDB_SWEEP_ID")
+                if sweep_id:
+                    os.environ["WANDB_SWEEP_ID"] = sweep_id     # attach the run to this sweep
+                try:
+                    run = wandb.init(
+                        project=wandb_project, name=name, tags=[tag], reinit=True,
+                        config={**settings, "code_version": code_version(), **kw,
+                                "hidden_dims": "_".join(map(str, hidden_dims)) or "linear",
+                                "activation": "linear" if activation is None
+                                              else activation.__name__})
+                finally:
+                    if prev is None:
+                        os.environ.pop("WANDB_SWEEP_ID", None)
+                    else:
+                        os.environ["WANDB_SWEEP_ID"] = prev
+            run_id = run.id if run is not None else uuid.uuid4().hex[:8]
+            metrics = _score_config(
+                run, run_id, name, sweep_id, source, settings, hidden_dims, activation, kw,
+                ks, n_dags, n_nodes, alpha, sample_sizes, card, val_frac, results_dir,
+                n_cached, n_test, trial_csv, dag_offset, n_jobs, device, torch_threads)
+            if run is not None:
+                run.finish()
+            results.append({"name": name, "in_degree": settings["in_degree"],
+                            "sweep_id": sweep_id, "run_id": run_id, **metrics})
+    return pd.DataFrame(results)
 
 
 def _rename_wandb_run(entity, project, run_id, name):
