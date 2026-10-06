@@ -5,7 +5,7 @@ import time
 import numpy as np
 import psutil
 
-from .models import nn_probs
+from .models import Cards, nn_probs
 
 EPS = 1e-12
 
@@ -50,10 +50,11 @@ def kl_mle(true_model, mle_model, test_data):
     )
 
 
-def kl_nn(true_model, nets, test_data, card):
+def kl_nn(true_model, nets, test_data, cards):
+    cards = Cards.coerce(cards, nets.nodes())
     return kl_calculation(
         true_model, test_data,
-        q_probs=lambda node, td: nn_probs(nets[node], td, card),
+        q_probs=lambda node, td: nn_probs(nets[node], td, cards),
     )
 
 

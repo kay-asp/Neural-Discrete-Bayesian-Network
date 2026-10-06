@@ -2,25 +2,29 @@
 from pgmpy.models import DiscreteBayesianNetwork
 from pgmpy.parameter_estimator import DiscreteBayesianEstimator, DiscreteMLE
 
+from .models import Cards
+
 
 # MLE with normal default for unseen parent configurations
-def fit_mle(G, data, card):
+def fit_mle(G, data, cards):
+    """cards : an int (shared) or node -> cardinality."""
+    cards = Cards.coerce(cards, G.nodes())
     model = DiscreteBayesianNetwork(list(G.edges()))
     model.add_nodes_from(G.nodes())
 
     estimator = DiscreteMLE()
     # force full state space so unobserved states aren't dropped
-    estimator.state_names = {v: list(range(card)) for v in G.nodes()}
+    estimator.state_names = {v: list(range(cards[v])) for v in G.nodes()}
     model.fit(data, estimator=estimator)
     return model
 
 # MLE with a small symmetric Dirichlet pseudocount
-def fit_mle_pseudocount(G, data, card):
-    pseudo_count=0.5
+def fit_mle_pseudocount(G, data, cards, pseudo_count=0.5):
+    cards = Cards.coerce(cards, G.nodes())
     m = DiscreteBayesianNetwork(list(G.edges()))
     m.add_nodes_from(G.nodes())
     est = DiscreteBayesianEstimator(
-        state_names={v: list(range(card)) for v in G.nodes()},
+        state_names={v: list(range(cards[v])) for v in G.nodes()},
         prior_type="dirichlet",
         pseudo_counts=float(pseudo_count),   # 0.1–1.0 is a sensible range
     )

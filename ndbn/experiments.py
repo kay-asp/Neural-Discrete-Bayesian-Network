@@ -190,21 +190,23 @@ def activation_name(est):
     return "linear" if est["activation"] is None else est["activation"].__name__
 
 
-def fit_estimator(est, G, sample, train_df, val_df, card, n_epochs, seed):
+def fit_estimator(est, G, sample, train_df, val_df, cards, n_epochs, seed):
     """Fit one entry of ESTIMATORS -> (model, wall_s, cpu_s, rss_delta_bytes).
 
     Tabular estimators fit on the whole budget `sample` (= train_df + val_df):
     they have no early stopping, so they get every row the NN sees.
+    cards : an int (shared) or node -> cardinality.
     """
     if est["type"] == "mle":
-        return timed_fit(fit_mle, G, sample, card)
+        return timed_fit(fit_mle, G, sample, cards)
     if est["type"] == "dirichlet":
-        return timed_fit(fit_mle_pseudocount, G, sample, card)
+        return timed_fit(fit_mle_pseudocount, G, sample, cards,
+                         pseudo_count=est.get("pseudo_count", 0.5))
     # optional tuned hyperparameters (lr, weight_decay, dropout, ...) pass through
     kw = {x: est[x] for x in NN_HPARAMS if x in est}
     kw.setdefault("n_epochs", n_epochs)
     return timed_fit(
-        fit_nn, G, train_df, card,
+        fit_nn, G, train_df, cards,
         val_data=val_df,
         hidden_dims=est["hidden_dims"],
         activation=est["activation"],
@@ -213,19 +215,25 @@ def fit_estimator(est, G, sample, train_df, val_df, card, n_epochs, seed):
     )
 
 
-def evaluate(model, true_model, test_data, card, n_epochs):
+def model_stats(model, n_epochs):
+    """Size stats of a fitted model, plus early-stopping stats for an NN."""
+    if not isinstance(model, NeuralCPDs):
+        return mle_param_stats(model)
+    extra = model.param_stats()
+    extra["stop_epoch_mean"] = float(np.mean(list(model.stop_epoch_.values())))
+    extra["best_epoch_mean"] = float(np.mean(list(model.best_epoch_.values())))
+    extra["frac_at_ceiling"] = float(np.mean(
+        [e >= n_epochs for e in model.stop_epoch_.values()]))
+    return extra
+
+
+def evaluate(model, true_model, test_data, cards, n_epochs):
     """KL vs ground truth plus size / early-stopping stats -> (kl, se, extra)."""
     if isinstance(model, NeuralCPDs):
-        kl, se = kl_nn(true_model, model, test_data, card)
-        extra = model.param_stats()
-        extra["stop_epoch_mean"] = float(np.mean(list(model.stop_epoch_.values())))
-        extra["best_epoch_mean"] = float(np.mean(list(model.best_epoch_.values())))
-        extra["frac_at_ceiling"] = float(np.mean(
-            [e >= n_epochs for e in model.stop_epoch_.values()]))
+        kl, se = kl_nn(true_model, model, test_data, cards)
     else:
         kl, se = kl_mle(true_model, model, test_data)
-        extra = mle_param_stats(model)
-    return kl, se, extra
+    return kl, se, model_stats(model, n_epochs)
 
 
 def _run_dag_job(job, estimators, sample_sizes, card, val_frac, n_test, n_epochs,

@@ -27,7 +27,7 @@ class Trace:
                 and self.test_data is not None)
 
     def log_epoch(self, epoch, nodes, val_loss, train_loss,
-                  best_val_loss, best_train_loss, stopped, models, parents, card):
+                  best_val_loss, best_train_loss, stopped, models, parents, cards):
         """One epoch of W&B diagnostics. Safe to call unguarded.
 
         Losses are summed over all nodes: the joint negative log-likelihood of
@@ -48,8 +48,8 @@ class Trace:
         rec["gap"] = rec["val_loss"] - rec["train_loss"]
 
         if self.tracking_kl and (epoch + 1) % self.kl_every == 0:
-            snap = NeuralCPDs(models=models, parents=parents, card=card)
-            rec["true_kl"] = kl_nn(self.true_model, snap, self.test_data, card)[0]
+            snap = NeuralCPDs(models=models, parents=parents, cards=cards)
+            rec["true_kl"] = kl_nn(self.true_model, snap, self.test_data, cards)[0]
 
         self.run.log(rec, step=epoch + 1)
 

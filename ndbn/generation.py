@@ -9,7 +9,8 @@ from pgmpy.models import DiscreteBayesianNetwork
 
 # Each random step gets its own purpose number, so e.g. the train and test data
 # of one config never share a seed. Changing these numbers changes every seed.
-SEED_PURPOSES = {"dag": 1, "cpt": 2, "train": 3, "test": 4, "split": 5, "nn": 6}
+SEED_PURPOSES = {"dag": 1, "cpt": 2, "train": 3, "test": 4, "split": 5, "nn": 6,
+                 "fold": 7, "subsample": 8}   # 7-8: real-data folds / nested subsamples
 
 def make_seed(purpose, *values):
     """Independent seed for one purpose ("dag", "train", ...) of one config.

@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 
 from . import models as _models
-from .models import NeuralCPDs, NodeNN, one_hot_parents
+from .models import Cards, NeuralCPDs, NodeNN, one_hot_parents
 from .tracing import Trace
 
 
@@ -20,7 +20,7 @@ def split_train_val(data, val_frac=0.2, seed=0):
             data.iloc[val_idx].reset_index(drop=True))
 
 
-def train_nn_cpds(G, df_train, df_val, card,
+def train_nn_cpds(G, df_train, df_val, cards,
                   hidden_dims, activation,
                   n_epochs=500, lr=1e-3, dropout=0.0,
                   weight_decay=1e-4, batch_size=64, patience=20,
@@ -30,6 +30,7 @@ def train_nn_cpds(G, df_train, df_val, card,
     opt_cls = {"adam": torch.optim.Adam, "adamw": torch.optim.AdamW}[optimizer]
     torch.manual_seed(seed)
     nodes = list(G.nodes())
+    cards = Cards.coerce(cards, nodes)
     parents = {node: sorted(G.predecessors(node)) for node in nodes}
     loss = nn.CrossEntropyLoss()
 
@@ -38,13 +39,13 @@ def train_nn_cpds(G, df_train, df_val, card,
     train_times = {node: 0.0 for node in nodes}
 
     for node in nodes:
-        models[node] = NodeNN(len(parents[node]), card, hidden_dims,
-                              activation, dropout).to(_models.DEVICE)
+        models[node] = NodeNN([cards[p] for p in parents[node]], cards[node],
+                              hidden_dims, activation, dropout).to(_models.DEVICE)
         optimizers[node] = opt_cls(models[node].parameters(),
                                    lr=lr, weight_decay=weight_decay)
-        Xtr[node] = one_hot_parents(df_train, parents[node], card)
+        Xtr[node] = one_hot_parents(df_train, parents[node], cards)
         ytr[node] = torch.as_tensor(df_train[node].to_numpy().astype(np.int64), device=_models.DEVICE)
-        Xva[node] = one_hot_parents(df_val, parents[node], card)
+        Xva[node] = one_hot_parents(df_val, parents[node], cards)
         yva[node] = torch.as_tensor(df_val[node].to_numpy().astype(np.int64), device=_models.DEVICE)
     n_train = len(df_train)
 
@@ -119,7 +120,7 @@ def train_nn_cpds(G, df_train, df_val, card,
         if trace.logging and val_loss:
             trace.log_epoch(epoch, nodes, val_loss, train_loss,
                             best_val_loss, best_train_loss, stopped,
-                            models, parents, card)
+                            models, parents, cards)
 
         if verbose and (epoch + 1) % 50 == 0 and val_loss:
             tr = f"train {np.mean(list(train_loss.values())):.4f}, " if train_loss else ""
@@ -135,16 +136,18 @@ def train_nn_cpds(G, df_train, df_val, card,
             models[node].load_state_dict(best_state[node])
 
     return NeuralCPDs(
-        models=models, parents=parents, card=card,
+        models=models, parents=parents, cards=cards,
         best_val_=best_val_loss, train_loss_=best_train_loss,
         train_time_=train_times, stop_epoch_=stop_epoch, best_epoch_=best_epoch,
         history_=({"train": hist_train_loss, "val": hist_val_loss}
                   if trace.history else {}),
     )
 
-def fit_nn(G, data, card, val_data=None, val_frac=0.2,
+def fit_nn(G, data, cards, val_data=None, val_frac=0.2,
            hidden_dims=(32,), activation=nn.ReLU, seed=0, verbose=False, **kw):
-    """Neural CPD estimator. Mirrors fit_mle(G, data, card).
+    """Neural CPD estimator. Mirrors fit_mle(G, data, cards).
+
+    cards    : an int (shared) or node -> cardinality.
 
     val_data : held-out split for early stopping. If None, carved from `data`
                — convenient for standalone use, but note that then `data` is a
@@ -152,6 +155,6 @@ def fit_nn(G, data, card, val_data=None, val_frac=0.2,
     """
     if val_data is None:
         data, val_data = split_train_val(data, val_frac=val_frac, seed=seed)
-    return train_nn_cpds(G, data, val_data, card,
+    return train_nn_cpds(G, data, val_data, Cards.coerce(cards, G.nodes()),
                          hidden_dims=hidden_dims, activation=activation,
                          seed=seed, verbose=verbose, **kw)
