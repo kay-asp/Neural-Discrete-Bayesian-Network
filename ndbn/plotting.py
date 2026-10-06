@@ -509,16 +509,19 @@ def top_config_values(tables, snap=None, fixed=None, show=True):
     return out
 
 
-def candidate_table(trials, source="candidates", show=True):
+def candidate_table(trials, source="candidates", n_se=2.0, show=True):
     """Compare chosen configs run on every (in-degree, sample size).
 
     trials : the tuning data (load_trials(RESULTS_DIR)); the rows with
              source=`source` (written by experiments.run_configs) are used,
              labelled by run_name. Duplicates from re-running are dropped,
              keeping the latest.
-    One row per config: mean KL over DAGs for each (k, N) ("kl k6 N600"), its
-    regret % relative to the best config in that (k, N) ("regret k6 N600"),
-    and worst_% (largest regret over all pairs). Sorted by worst_%.
+    One row per config, one column per (k, N) ("k6 N600"): the config's mean
+    KL over the tuning DAGs. In the printed table, a value is bold if it is
+    within n_se standard errors of the best config in that column (best mean
+    KL + n_se * its kl_se, where kl_se = sqrt(sum of the DAGs' kl_se^2) / n,
+    the DAGs having separate test sets). Rows are sorted by how many columns
+    they are bold in, then by average rank. Returns the table of mean KLs.
     """
     if "source" not in trials:
         return pd.DataFrame()
@@ -526,17 +529,28 @@ def candidate_table(trials, source="candidates", show=True):
     if r.empty:
         return pd.DataFrame()
     r = r.drop_duplicates(["run_name", "in_degree", "sample_size", "dag_idx"], keep="last")
-    kl = r.pivot_table(index="run_name", columns=["in_degree", "sample_size"], values="kl",
-                       aggfunc="mean")
-    regret = 100 * (kl / kl.min() - 1)
+    cols = ["in_degree", "sample_size"]
+    kl = r.pivot_table(index="run_name", columns=cols, values="kl", aggfunc="mean")
+    se = r.pivot_table(index="run_name", columns=cols, values="kl_se",
+                       aggfunc=lambda x: np.sqrt((x ** 2).sum()) / len(x))
+    best = kl.idxmin()                                   # best config per column
+    limit = {c: kl.loc[best[c], c] + n_se * se.loc[best[c], c] for c in kl.columns}
+    near = pd.DataFrame({c: kl[c] <= limit[c] for c in kl.columns})
+    order = (pd.DataFrame({"n": near.sum(axis=1), "rank": kl.rank().mean(axis=1)})
+             .sort_values(["n", "rank"], ascending=[False, True]).index)
     label = lambda kn: f"k{kn[0]} N{kn[1]}"
-    out = pd.concat([kl.set_axis([f"kl {label(c)}" for c in kl.columns], axis=1),
-                     regret.set_axis([f"regret {label(c)}" for c in regret.columns], axis=1)],
-                    axis=1)
-    out["worst_%"] = regret.max(axis=1)
-    out = out.sort_values("worst_%").reset_index().rename(columns={"run_name": "config"})
+    out = kl.loc[order].set_axis([label(c) for c in kl.columns], axis=1)
+    near = near.loc[order].set_axis(out.columns, axis=1)
+    out.index.name = "config"
     if show:
-        print("chosen configs on every (in-degree, sample size): mean KL over tuning DAGs and "
-              "regret % vs the best config in each pair")
-        _show(out.round(4))
-    return out
+        print(f"chosen configs on every (in-degree, sample size): mean KL over the tuning DAGs; "
+              f"bold = within {n_se:g} SE of the best config in that column")
+        try:
+            styled = out.style.format("{:.4f}").apply(
+                lambda col: ["font-weight: bold" if b else "" for b in near[col.name]])
+            _show(styled)
+        except ImportError:                              # no jinja2: mark with * instead
+            _show(out.round(4).astype(str).where(~near, out.round(4).astype(str) + " *"))
+    return out.reset_index()
+
+
