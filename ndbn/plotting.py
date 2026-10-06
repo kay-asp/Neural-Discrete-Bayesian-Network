@@ -36,9 +36,14 @@ def _colors(n):
 
 def _filter(df, x, hue, alpha=None, sample_size=None,
             n_nodes=None, in_degree=None, estimator=None, card=None):
-    """Filter df to fixed values for every variable that isn't x or hue."""
+    """Filter df to fixed values for every variable that isn't x or hue.
+
+    A variable whose column df doesn't have (e.g. alpha in real-data results)
+    is not filtered on.
+    """
     sub = df.copy()
-    skip = {x, hue}
+    skip = {x, hue} | {c for c in ("sample_size", "alpha", "n_nodes", "in_degree", "card")
+                       if c not in df.columns}
 
     if "sample_size" not in skip and sample_size is not None:
         sub = sub[sub["sample_size"] == sample_size]
@@ -94,8 +99,9 @@ def plot_grouped_curves(
               f"Check your default values.")
         return None
 
-    # Build subtitle showing what's held constant
-    skip = {x, hue}
+    # Build subtitle showing what's held constant (only columns df has)
+    skip = {x, hue} | {c for c in ("sample_size", "alpha", "n_nodes", "in_degree",
+                                   "estimator", "card") if c not in df.columns}
     held = []
     if "sample_size" not in skip: held.append(f"N={sample_size}")
     if "alpha"       not in skip: held.append(f"α={alpha}")
@@ -646,3 +652,44 @@ def candidate_table(trials, source="candidates", n_se=2.0, tables=None, top_valu
     return out
 
 
+
+
+# ── Real data ───────────────────────────────────────────────────────────────
+
+def plot_node_loglik(node_df, baseline="dirichlet_0.5", sample_size=None,
+                     ax=None, figsize=(7, 5), out_path=None, title=None):
+    """Per-node held-out log-likelihood gain over `baseline` vs that node's
+    number of parent configurations (log x), one colour per estimator.
+
+    node_df : real_data.node_table output. Each point is one node in one
+    (discretisation, DAG), averaged over folds; positive = beats the baseline.
+    Shows whether any NN advantage sits in the high in-degree nodes.
+    """
+    sub = node_df if sample_size is None else node_df[node_df["sample_size"] == sample_size]
+    keys = ["disc_level", "dag_level", "n_train_spec", "node", "n_parent_configs"]
+    mean = sub.groupby(keys + ["estimator"])["loglik"].mean().unstack("estimator")
+    if baseline not in mean:
+        print(f"WARNING: baseline {baseline!r} not in the results")
+        return None
+    gain = mean.drop(columns=[baseline]).sub(mean[baseline], axis=0).reset_index()
+
+    own_fig = ax is None
+    if own_fig:
+        fig, ax = plt.subplots(figsize=figsize)
+    ests = [c for c in mean.columns if c != baseline]
+    for est, c in zip(ests, _colors(len(ests))):
+        ax.scatter(gain["n_parent_configs"], gain[est], s=18, alpha=0.6, color=c, label=est)
+    ax.axhline(0, color="grey", lw=1)
+    ax.set_xscale("log")
+    ax.set_xlabel("parent configurations of the node", fontsize=12)
+    ax.set_ylabel(f"log-likelihood gain over {baseline}", fontsize=12)
+    held = "all N" if sample_size is None else f"N={sample_size}"
+    ax.set_title(title or held, fontsize=11, color=None if title else "grey")
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend()
+    if own_fig:
+        fig.tight_layout()
+        if out_path:
+            fig.savefig(out_path, dpi=150)
+        return fig, ax
+    return ax

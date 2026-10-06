@@ -19,12 +19,28 @@ def set_device(name=None):
     return DEVICE
 
 
+class Cards(dict):
+    """node -> cardinality. Every public entry point coerces its `card(s)`
+    argument with Cards.coerce, so a plain int (one shared cardinality, as the
+    synthetic experiments use) and a per-node dict (real data) both work."""
+    @classmethod
+    def coerce(cls, card, nodes):
+        if isinstance(card, (int, np.integer)):
+            return cls({n: int(card) for n in nodes})
+        return cls(card)
+
+
 # Linear Softmax Baseline
 class NodeNN(nn.Module):
     # one-hot parent config -> softmax distribution over child states
-    def __init__(self, n_parents, card, hidden_dims=(), activation=nn.ReLU, dropout=0.0):
+    def __init__(self, parent_cards, card, hidden_dims=(), activation=nn.ReLU, dropout=0.0):
+        """parent_cards : each parent's cardinality (input = their one-hots,
+        so in_dim is their SUM), or an int = number of parents, each with the
+        child's card (the old uniform-card signature)."""
         super().__init__()
-        in_dim = n_parents * card if n_parents>0 else 1
+        if isinstance(parent_cards, (int, np.integer)):
+            parent_cards = [card] * int(parent_cards)
+        in_dim = sum(parent_cards) or 1
         dims = [in_dim] + list(hidden_dims)
 
         layers = []
@@ -41,11 +57,15 @@ class NodeNN(nn.Module):
         return self.logits_out(self.feature_extractor(x))   # raw logits
 
 
-def one_hot_parents(data, parents, card):
+def one_hot_parents(data, parents, cards):
+    """Each parent one-hot at its own cardinality, concatenated in `parents`
+    order -> (N, sum of parent cards); (N, 1) zeros for a root node."""
     if not parents:
         return torch.zeros(len(data), 1, dtype=torch.float32, device=DEVICE)
+    cards = Cards.coerce(cards, parents)
     idx = torch.as_tensor(data[parents].to_numpy(np.int64), device=DEVICE)
-    return torch.nn.functional.one_hot(idx, card).flatten(1).float()
+    return torch.cat([torch.nn.functional.one_hot(idx[:, j], cards[p])
+                      for j, p in enumerate(parents)], dim=1).float()
 
 
 @dataclass
@@ -57,7 +77,7 @@ class NeuralCPDs:
     """
     models: dict                  # node -> NodeNN
     parents: dict                 # node -> list[str], canonical ordering
-    card: int
+    cards: dict                   # node -> cardinality
 
     best_val_:   dict = field(default_factory=dict)
     train_loss_:  dict = field(default_factory=dict)
@@ -65,6 +85,14 @@ class NeuralCPDs:
     stop_epoch_: dict = field(default_factory=dict)   # when patience ran out
     best_epoch_: dict = field(default_factory=dict)   # epoch of the kept weights
     history_:    dict = field(default_factory=dict)
+
+    @property
+    def card(self):
+        """The shared cardinality; raises if nodes differ (use .cards)."""
+        values = set(self.cards.values())
+        if len(values) != 1:
+            raise ValueError(f"cardinalities differ across nodes ({sorted(values)}); use .cards")
+        return values.pop()
 
     def __getitem__(self, node):
         return self.models[node], self.parents[node]
@@ -84,14 +112,13 @@ class NeuralCPDs:
         }
 
 
-def nn_probs(net_and_parents, test_data, card):
-    """Q(node | pa) for every row, from that node's network -> (N, card)."""
+def nn_probs(net_and_parents, test_data, cards):
+    """Q(node | pa) for every row, from that node's network -> (N, card).
+
+    cards : an int (shared) or node -> cardinality (only the parents' are read).
+    """
     net, parents = net_and_parents
-    if parents:
-        idx = torch.as_tensor(test_data[parents].to_numpy().astype(np.int64), device=DEVICE)
-        x = torch.nn.functional.one_hot(idx, card).reshape(len(test_data), -1).float()
-    else:
-        x = torch.zeros((len(test_data), 1), dtype=torch.float32, device=DEVICE)
+    x = one_hot_parents(test_data, parents, cards)
     net.eval()
     with torch.no_grad():
         return torch.softmax(net(x), dim=1).cpu().numpy()
