@@ -509,36 +509,66 @@ def top_config_values(tables, snap=None, fixed=None, show=True):
     return out
 
 
-def candidate_table(trials, source="candidates", n_se=2.0, tables=None, show=True):
+_CONFIG_KEY = ["hidden_dims", "activation", "lr", "weight_decay", "dropout", "patience",
+               "batch_size", "optimizer", "n_epochs"]
+
+
+def _config_key(df):
+    """One string per row identifying its settings (lr / weight_decay rounded to
+    1 significant figure, numbers normalised), so the same config matches
+    across runs, names and tables."""
+    def norm(c, v):
+        if pd.isna(v):
+            return ""
+        if c in _ROUNDED:
+            v = _round_sig(v)
+        try:
+            return repr(float(v))
+        except (TypeError, ValueError):
+            return str(v)
+    cols = [c for c in _CONFIG_KEY if c in df]
+    return df.apply(lambda r: "|".join(norm(c, r[c]) for c in cols), axis=1)
+
+
+def candidate_table(trials, source="candidates", n_se=2.0, tables=None, top_values=None,
+                    show=True):
     """Compare chosen configs run on every (in-degree, sample size).
 
     trials : the tuning data (load_trials(RESULTS_DIR)); the rows with
-             source=`source` (written by experiments.run_configs) are used,
-             labelled by run_name. Duplicates from re-running are dropped,
-             keeping the latest.
-    One row per config, one column per (k, N) ("k6 N600"): the config's mean
-    KL over the tuning DAGs. In the printed table, a value is bold if it is
-    within n_se standard errors of the best result *overall* for that (k, N),
-    i.e. among all tuning trials (sweeps and candidates): best mean KL +
-    n_se * its kl_se. That best comes from `tables` (summarise_trials output,
-    so it matches the top-config tables, including FIXED / SNAP grouping) if
-    given, otherwise from every complete trial in `trials`, with
-    kl_se = sqrt(sum of the DAGs' kl_se^2) / n (the DAGs have separate test
-    sets). Rows are sorted by how many columns they are bold in, then by
-    average rank. Also listed per config: dropout, patience, batch_size,
-    fit_time_s (mean seconds per fit) and stored_params per in-degree
-    ("params k6"), since the input layer grows with the number of parents.
-    Returns the table.
+             source=`source` (written by experiments.run_configs) are used.
+             Runs are grouped by their settings, not their name, so the same
+             config run under different names is one row (all its names shown,
+             e.g. "a / b"); duplicate cells from re-running keep the latest.
+    top_values : top_config_values output. If given, each config is matched
+             to its row there by settings and the table is indexed by that row
+             number ("top_idx"), so a final model can be picked as
+             top_values.loc[[top_idx]]. Configs not in it have no index and
+             are listed last.
+    One column per (k, N) ("k6 N600"): the config's mean KL over the tuning
+    DAGs. In the printed table, a value is bold if it is within n_se standard
+    errors of the best result *overall* for that (k, N), i.e. among all tuning
+    trials (sweeps and candidates): best mean KL + n_se * its kl_se. That best
+    comes from `tables` (summarise_trials output, so it matches the top-config
+    tables, including FIXED / SNAP grouping) if given, otherwise from every
+    complete trial in `trials`, with kl_se = sqrt(sum of the DAGs' kl_se^2)/n
+    (the DAGs have separate test sets). Rows are sorted by how many columns
+    they are bold in, then by average rank. Also listed per config: dropout,
+    patience, batch_size, fit_time_s (mean seconds per fit) and stored_params
+    per in-degree ("params k6"), since the input layer grows with the number
+    of parents. Returns the table.
     """
     if "source" not in trials:
         return pd.DataFrame()
-    r = trials[trials["source"] == source]
+    r = trials[trials["source"] == source].copy()
     if r.empty:
         return pd.DataFrame()
-    r = r.drop_duplicates(["run_name", "in_degree", "sample_size", "dag_idx"], keep="last")
+    r["_key"] = _config_key(r)
+    names = r.groupby("_key", sort=False)["run_name"].agg(
+        lambda x: " / ".join(reversed(list(dict.fromkeys(reversed(list(x)))))))
+    r = r.drop_duplicates(["_key", "in_degree", "sample_size", "dag_idx"], keep="last")
     cols = ["in_degree", "sample_size"]
-    kl = r.pivot_table(index="run_name", columns=cols, values="kl", aggfunc="mean")
-    se = r.pivot_table(index="run_name", columns=cols, values="kl_se",
+    kl = r.pivot_table(index="_key", columns=cols, values="kl", aggfunc="mean")
+    se = r.pivot_table(index="_key", columns=cols, values="kl_se",
                        aggfunc=lambda x: np.sqrt((x ** 2).sum()) / len(x))
     # threshold per (k, N): best result overall, from all tuning trials
     limit = {}
@@ -555,42 +585,64 @@ def candidate_table(trials, source="candidates", n_se=2.0, tables=None, show=Tru
         b = per.loc[per["mean_kl"].idxmin()]
         limit[c] = b["mean_kl"] + n_se * b["kl_se"]
     near = pd.DataFrame({c: kl[c] <= limit[c] for c in kl.columns})
-    order = (pd.DataFrame({"n": near.sum(axis=1), "rank": kl.rank().mean(axis=1)})
-             .sort_values(["n", "rank"], ascending=[False, True]).index)
+
+    # row number in top_values, matched by settings
+    top_idx = pd.Series(pd.NA, index=kl.index, dtype="Int64")
+    if top_values is not None and len(top_values):
+        lookup = dict(zip(_config_key(top_values), top_values.index))
+        top_idx = pd.Series([lookup.get(k, pd.NA) for k in kl.index], index=kl.index, dtype="Int64")
+    order = (pd.DataFrame({"unmatched": top_idx.isna() & (top_values is not None),
+                           "n": near.sum(axis=1), "rank": kl.rank().mean(axis=1)})
+             .sort_values(["unmatched", "n", "rank"], ascending=[True, False, True]).index)
+
     label = lambda kn: f"k{kn[0]} N{kn[1]}"
     out = kl.loc[order].set_axis([label(c) for c in kl.columns], axis=1)
     kl_cols = list(out.columns)
     near = near.loc[order].set_axis(kl_cols, axis=1)
+    out.insert(0, "config", names.reindex(order))
     # settings and cost, per config
-    by = r.groupby("run_name")
+    by = r.groupby("_key")
     for c in ("dropout", "patience", "batch_size"):
         if c in r:
             out[c] = by[c].first()
     if "fit_time_s" in r:
         out["fit_time_s"] = by["fit_time_s"].mean()      # mean seconds per fit
     if "stored_params" in r:                              # depends on in-degree (input size)
-        params = r.pivot_table(index="run_name", columns="in_degree", values="stored_params",
+        params = r.pivot_table(index="_key", columns="in_degree", values="stored_params",
                                aggfunc="first")
         for k in params.columns:
             out[f"params k{k}"] = params[k]
-    out.index.name = "config"
+    out.index = pd.Index(top_idx.loc[order], name="top_idx" if top_values is not None else None)
+    near.index = out.index
     if show:
         print(f"chosen configs on every (in-degree, sample size): mean KL over the tuning DAGs; "
               f"bold = within {n_se:g} SE of the best result overall (all tuning trials) "
-              f"for that in-degree and sample size")
+              f"for that in-degree and sample size"
+              + ("; index = row in top_values" if top_values is not None else ""))
         try:
             fmt = {c: "{:.4f}" for c in kl_cols}
             fmt.update({c: "{:.0f}" for c in out.columns if c.startswith("params")
                         or c in ("patience", "batch_size")})
             fmt.update({"dropout": "{:.1f}", "fit_time_s": "{:.1f}"})
-            styled = out.style.format({c: f for c, f in fmt.items() if c in out}).apply(
-                lambda col: ["font-weight: bold" if b else "" for b in near[col.name]],
-                subset=kl_cols)
+            # display copy with text labels: Styler can't use a missing (NA) index label
+            disp = out.copy()
+            labels, n_na = [], 0
+            for i in out.index:
+                if pd.isna(i):
+                    n_na += 1
+                    labels.append("–" if n_na == 1 else f"– ({n_na})")
+                else:
+                    labels.append(str(i))
+            disp.index = pd.Index(labels, name=out.index.name)
+            styles = pd.DataFrame(np.where(near.to_numpy(), "font-weight: bold", ""),
+                                  index=disp.index, columns=kl_cols)
+            styled = disp.style.format({c: f for c, f in fmt.items() if c in disp}).apply(
+                lambda _: styles, axis=None, subset=kl_cols)
             _show(styled)
         except ImportError:                              # no jinja2: mark with * instead
             marked = out.round(4).astype(str)
-            marked[kl_cols] = marked[kl_cols].where(~near, marked[kl_cols] + " *")
+            marked[kl_cols] = marked[kl_cols].where(~near.to_numpy(), marked[kl_cols] + " *")
             _show(marked)
-    return out.reset_index()
+    return out
 
 

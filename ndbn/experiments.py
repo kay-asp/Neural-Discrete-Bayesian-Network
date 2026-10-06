@@ -1,5 +1,6 @@
 """Experiment grid (MLE vs neural CPDs) and the hyperparameter sweep."""
 import ast
+import json
 import logging
 import os
 import subprocess
@@ -820,3 +821,49 @@ def arms_from_configs(configs):
                 arm[c] = int(r[c]) if c in ints else r[c]
         arms.append(arm)
     return arms
+
+
+def save_chosen_configs(configs, path):
+    """Save the final NN config(s) for the main experiments to JSON.
+
+    configs : rows of plotting.top_config_values (e.g. top_values.loc[[3]]) or
+              a list of config dicts. They are converted with arms_from_configs,
+              stored with the activation by name, and with a note of which
+              top_values rows they came from, so the choice stays fixed even
+              if the indices change later. Read back with load_chosen_configs.
+    """
+    import datetime
+    rows = list(configs.index) if isinstance(configs, pd.DataFrame) else None
+    arms = arms_from_configs(configs) if isinstance(configs, pd.DataFrame) else list(configs)
+    saved = []
+    for a in arms:
+        act = a.get("activation")
+        saved.append({**{k: (v.item() if hasattr(v, "item") else v) for k, v in a.items()
+                         if k not in ("activation", "hidden_dims")},
+                      "hidden_dims": [int(h) for h in a.get("hidden_dims", ())],
+                      "activation": None if act is None else act.__name__})
+    doc = {"configs": saved,
+           "chosen_from": {"top_values_rows": [int(i) for i in rows] if rows else None,
+                           "saved": datetime.datetime.now().isoformat(timespec="seconds")}}
+    with open(path, "w") as f:
+        json.dump(doc, f, indent=2)
+    print(f"saved {len(saved)} config(s) to {path}: {[c['name'] for c in saved]}")
+    return saved
+
+
+def load_chosen_configs(path):
+    """The final NN config(s) saved by save_chosen_configs, as config dicts
+    (activation as an nn class, hidden_dims as a tuple) ready for ESTIMATORS."""
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"{path} not found: run the 'Chosen configs' cell at the end of "
+            "2_hyperparameter_tuning.ipynb to choose the final NN config(s)")
+    with open(path) as f:
+        doc = json.load(f)
+    by_name = {cls.__name__: cls for cls in ACTIVATIONS.values()}
+    out = []
+    for c in doc["configs"]:
+        act = c.get("activation")
+        out.append({**c, "hidden_dims": tuple(c.get("hidden_dims", ())),
+                    "activation": None if act in (None, "linear") else by_name.get(act, nn.ReLU)})
+    return out
