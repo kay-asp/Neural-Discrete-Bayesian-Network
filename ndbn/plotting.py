@@ -509,7 +509,7 @@ def top_config_values(tables, snap=None, fixed=None, show=True):
     return out
 
 
-def candidate_table(trials, source="candidates", n_se=2.0, show=True):
+def candidate_table(trials, source="candidates", n_se=2.0, tables=None, show=True):
     """Compare chosen configs run on every (in-degree, sample size).
 
     trials : the tuning data (load_trials(RESULTS_DIR)); the rows with
@@ -518,10 +518,17 @@ def candidate_table(trials, source="candidates", n_se=2.0, show=True):
              keeping the latest.
     One row per config, one column per (k, N) ("k6 N600"): the config's mean
     KL over the tuning DAGs. In the printed table, a value is bold if it is
-    within n_se standard errors of the best config in that column (best mean
-    KL + n_se * its kl_se, where kl_se = sqrt(sum of the DAGs' kl_se^2) / n,
-    the DAGs having separate test sets). Rows are sorted by how many columns
-    they are bold in, then by average rank. Returns the table of mean KLs.
+    within n_se standard errors of the best result *overall* for that (k, N),
+    i.e. among all tuning trials (sweeps and candidates): best mean KL +
+    n_se * its kl_se. That best comes from `tables` (summarise_trials output,
+    so it matches the top-config tables, including FIXED / SNAP grouping) if
+    given, otherwise from every complete trial in `trials`, with
+    kl_se = sqrt(sum of the DAGs' kl_se^2) / n (the DAGs have separate test
+    sets). Rows are sorted by how many columns they are bold in, then by
+    average rank. Also listed per config: dropout, patience, batch_size,
+    fit_time_s (mean seconds per fit) and stored_params per in-degree
+    ("params k6"), since the input layer grows with the number of parents.
+    Returns the table.
     """
     if "source" not in trials:
         return pd.DataFrame()
@@ -533,24 +540,57 @@ def candidate_table(trials, source="candidates", n_se=2.0, show=True):
     kl = r.pivot_table(index="run_name", columns=cols, values="kl", aggfunc="mean")
     se = r.pivot_table(index="run_name", columns=cols, values="kl_se",
                        aggfunc=lambda x: np.sqrt((x ** 2).sum()) / len(x))
-    best = kl.idxmin()                                   # best config per column
-    limit = {c: kl.loc[best[c], c] + n_se * se.loc[best[c], c] for c in kl.columns}
+    # threshold per (k, N): best result overall, from all tuning trials
+    limit = {}
+    for c in kl.columns:
+        if tables is not None and c in tables and len(tables[c]):
+            b = tables[c].iloc[0]                         # summarise_trials: best first
+            limit[c] = b["mean_kl"] + n_se * b["kl_se"]
+            continue
+        g = trials[(trials["in_degree"] == c[0]) & (trials["sample_size"] == c[1])]
+        per = g.groupby("run_id").agg(
+            mean_kl=("kl", "mean"), n=("dag_idx", "nunique"),
+            kl_se=("kl_se", lambda x: np.sqrt((x ** 2).sum()) / len(x)))
+        per = per[per["n"] == per["n"].max()]             # complete trials only
+        b = per.loc[per["mean_kl"].idxmin()]
+        limit[c] = b["mean_kl"] + n_se * b["kl_se"]
     near = pd.DataFrame({c: kl[c] <= limit[c] for c in kl.columns})
     order = (pd.DataFrame({"n": near.sum(axis=1), "rank": kl.rank().mean(axis=1)})
              .sort_values(["n", "rank"], ascending=[False, True]).index)
     label = lambda kn: f"k{kn[0]} N{kn[1]}"
     out = kl.loc[order].set_axis([label(c) for c in kl.columns], axis=1)
-    near = near.loc[order].set_axis(out.columns, axis=1)
+    kl_cols = list(out.columns)
+    near = near.loc[order].set_axis(kl_cols, axis=1)
+    # settings and cost, per config
+    by = r.groupby("run_name")
+    for c in ("dropout", "patience", "batch_size"):
+        if c in r:
+            out[c] = by[c].first()
+    if "fit_time_s" in r:
+        out["fit_time_s"] = by["fit_time_s"].mean()      # mean seconds per fit
+    if "stored_params" in r:                              # depends on in-degree (input size)
+        params = r.pivot_table(index="run_name", columns="in_degree", values="stored_params",
+                               aggfunc="first")
+        for k in params.columns:
+            out[f"params k{k}"] = params[k]
     out.index.name = "config"
     if show:
         print(f"chosen configs on every (in-degree, sample size): mean KL over the tuning DAGs; "
-              f"bold = within {n_se:g} SE of the best config in that column")
+              f"bold = within {n_se:g} SE of the best result overall (all tuning trials) "
+              f"for that in-degree and sample size")
         try:
-            styled = out.style.format("{:.4f}").apply(
-                lambda col: ["font-weight: bold" if b else "" for b in near[col.name]])
+            fmt = {c: "{:.4f}" for c in kl_cols}
+            fmt.update({c: "{:.0f}" for c in out.columns if c.startswith("params")
+                        or c in ("patience", "batch_size")})
+            fmt.update({"dropout": "{:.1f}", "fit_time_s": "{:.1f}"})
+            styled = out.style.format({c: f for c, f in fmt.items() if c in out}).apply(
+                lambda col: ["font-weight: bold" if b else "" for b in near[col.name]],
+                subset=kl_cols)
             _show(styled)
         except ImportError:                              # no jinja2: mark with * instead
-            _show(out.round(4).astype(str).where(~near, out.round(4).astype(str) + " *"))
+            marked = out.round(4).astype(str)
+            marked[kl_cols] = marked[kl_cols].where(~near, marked[kl_cols] + " *")
+            _show(marked)
     return out.reset_index()
 
 
