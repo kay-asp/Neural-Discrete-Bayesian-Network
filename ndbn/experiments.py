@@ -382,7 +382,7 @@ def _run_sweep_job(job, card, val_frac, wandb_project, hist_dir, results_dir,
             job_type=f"k{k}",
             name=f"{arm['name']}_k{k}_n{samples}",
             tags=[arm["name"], f"k{k}", f"n{samples}"],
-            config=cfg, reinit=True,
+            config=cfg, reinit="finish_previous",
         )
 
     tr = Trace(run=run, history=True)
@@ -737,13 +737,20 @@ def run_configs(configs, k_values, n_dags, n_nodes, alpha, sample_sizes, card, v
                 import wandb
                 env = ("WANDB_SWEEP_ID", "WANDB_ENTITY", "WANDB_PROJECT")
                 prev = {v: os.environ.get(v) for v in env}
+                extra = {}
                 if sweep:      # attach the run to this sweep, as W&B's agent does
                     os.environ.update(dict(zip(env, (sweep[2], sweep[0], sweep[1]))))
+                    # wandb reads WANDB_SWEEP_ID only when it first starts in a kernel,
+                    # so also pass the sweep id in this run's own settings
+                    try:
+                        extra["settings"] = wandb.Settings(sweep_id=sweep[2])
+                    except Exception:
+                        pass
                 try:
                     run = wandb.init(
                         entity=sweep[0] if sweep else None,
                         project=sweep[1] if sweep else wandb_project,
-                        name=name, tags=[tag], reinit=True,
+                        name=name, tags=[tag], reinit="finish_previous", **extra,
                         config={**settings, "code_version": code_version(), **kw,
                                 "hidden_dims": "_".join(map(str, hidden_dims)) or "linear",
                                 "activation": "linear" if activation is None
@@ -754,6 +761,9 @@ def run_configs(configs, k_values, n_dags, n_nodes, alpha, sample_sizes, card, v
                             os.environ.pop(v, None)
                         else:
                             os.environ[v] = old
+                if sweep and getattr(run, "sweep_id", None) != sweep[2]:
+                    tqdm.write(f"warning: W&B did not attach run {name} (k={ks[0]}) to sweep "
+                               f"{sweep[2]}; it is logged in {sweep[0]}/{sweep[1]} with tag {tag!r}")
             run_id = run.id if run is not None else uuid.uuid4().hex[:8]
             metrics = _score_config(
                 run, run_id, name, sweep_id, source, settings, hidden_dims, activation, kw,
