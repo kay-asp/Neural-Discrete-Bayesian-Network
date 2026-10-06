@@ -1,0 +1,41 @@
+{
+  "configs": [
+    {
+      "name": "01_256x128_lr3e-4",
+      "lr": 0.0003,
+      "weight_decay": 0.01,
+      "dropout": 0.0,
+      "patience": 20,
+      "batch_size": 128,
+      "optimizer": "adamw",
+      "n_epochs": 1000,
+      "hidden_dims": [
+        256,
+        128
+      ],
+      "activation": "ReLU"
+    },
+    {
+      "name": "k6_128_64_9",
+      "lr": 0.0003,
+      "weight_decay": 0.01,
+      "dropout": 0.1,
+      "patience": 50,
+      "batch_size": 128,
+      "optimizer": "adamw",
+      "n_epochs": 1000,
+      "hidden_dims": [
+        128,
+        64
+      ],
+      "activation": "ReLU"
+    }
+  ],
+  "chosen_from": {
+    "top_values_rows": [
+      0,
+      8
+    ],
+    "saved": "2026-10-06T09:24:45"
+  }
+}
