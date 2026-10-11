@@ -294,8 +294,9 @@ def _group_trials(s, cols):
     return pd.DataFrame(rows).set_index("run_id")
 
 
-def summarise_trials(trials, n_se=1.0, fixed=None, snap=(), show=True, **filters):
-    """Per (in_degree, sample_size): the trials within n_se kl_se of the best.
+def summarise_trials(trials, n_se=1.0, fixed=None, snap=(), rel_tol=0.0, max_params=None,
+                     show=True, **filters):
+    """Per (in_degree, sample_size): the trials within n_se kl_se (or rel_tol) of the best.
 
     trials  : the per-cell trial CSV(s) (one row per trial x dag x sample size).
     filters : any column = value, e.g. card=2, alpha=0.5, sweep_id="abc123".
@@ -305,7 +306,15 @@ def summarise_trials(trials, n_se=1.0, fixed=None, snap=(), show=True, **filters
     and kl_se = sqrt(sum of per-cell kl_se^2) / n_cells, the standard error of
     that mean from the test-row Monte Carlo error. Trials with fewer DAGs than
     the most complete one in that pair are dropped. The best trial is the
-    lowest mean_kl; a trial is kept if mean_kl <= best mean_kl + n_se * best kl_se.
+    lowest mean_kl; a trial is kept if mean_kl <= best mean_kl + n_se * best kl_se
+    (statistically indistinguishable) or mean_kl <= best mean_kl * (1 + rel_tol)
+    (practically negligible, e.g. rel_tol=0.02 for 2%), whichever is looser.
+    max_params : {in-degree: limit}, e.g. {10: 50_000}: keep only configs with
+              fewer stored params than the limit at that in-degree, in every
+              table (as in candidate_table). A config's params at k=10 are
+              looked up by its hidden_dims (and card) from any trial run at
+              k=10; configs whose architecture never ran there are dropped.
+              The best (and so the threshold) is taken among the configs left.
     Settings are tidied before trials are compared: lr / weight_decay are
     rounded to 1 significant figure, unless listed in
     snap    : (column, mantissas) pairs, e.g. (("lr", (1, 3)),) puts lr on
@@ -343,6 +352,14 @@ def summarise_trials(trials, n_se=1.0, fixed=None, snap=(), show=True, **filters
     # display only: identifiers, fixed settings and settings that never vary
     hidden = ["run_id", "n_dags", *fixed] + [c for c in [*hp, "sweep_id"]
                                              if c in t and t[c].nunique(dropna=False) <= 1]
+    # params depend only on the architecture, in-degree and cardinality
+    arch = [c for c in ("hidden_dims", "card") if c in t]
+    caps = {}
+    for k, cap in (max_params or {}).items():
+        at_k = t[t["in_degree"] == k] if "stored_params" in t else t.iloc[:0]
+        if at_k.empty:
+            raise KeyError(f"no stored_params recorded for in-degree {k}")
+        caps[k] = (at_k.groupby(arch)["stored_params"].first().to_dict(), cap)
     tables = {}
     for (k, n), g in t.groupby(["in_degree", "sample_size"]):
         s = g.groupby("run_id").agg(
@@ -355,6 +372,14 @@ def summarise_trials(trials, n_se=1.0, fixed=None, snap=(), show=True, **filters
             **{c: (c, "mean") for c in extra},
             **({"sweep_id": ("sweep_id", "first")} if "sweep_id" in g else {}))
         s = s[s["n_dags"] == s["n_dags"].max()]
+        if caps:
+            a = g.groupby("run_id")[arch].first().loc[s.index]
+            keys = [r[0] if len(arch) == 1 else tuple(r) for r in a.itertuples(index=False)]
+            # architecture never run at that in-degree -> no params known -> dropped
+            s = s[[all(params_at_k.get(key, np.inf) < cap for params_at_k, cap in caps.values())
+                   for key in keys]]
+        if s.empty:
+            continue
         # tidy settings, then average trials that have become identical
         for c in hp:
             if c in fixed:
@@ -366,9 +391,12 @@ def summarise_trials(trials, n_se=1.0, fixed=None, snap=(), show=True, **filters
         s = _group_trials(s, hp)
         s = s.sort_values("mean_kl")
         best = s.iloc[0]
-        top = s[s["mean_kl"] <= best["mean_kl"] + n_se * best["kl_se"]].reset_index()
+        limit = max(best["mean_kl"] + n_se * best["kl_se"], best["mean_kl"] * (1 + rel_tol))
+        top = s[s["mean_kl"] <= limit].reset_index()
         top.attrs["hidden"] = hidden        # for shared_settings_table
         top.attrs["n_se"] = n_se            # threshold, reported downstream
+        top.attrs["rel_tol"] = rel_tol
+        top.attrs["max_params"] = dict(max_params or {})
         top.attrs["fixed"] = fixed           # top_config_values reuses these
         top.attrs["snap"] = tuple(snap)
         tables[(k, n)] = top
@@ -376,15 +404,21 @@ def summarise_trials(trials, n_se=1.0, fixed=None, snap=(), show=True, **filters
             grouped = "".join(f" ({c} fixed at {v:g})" for c, v in fixed.items())
             grouped += "".join(f" ({c} snapped to {'-'.join(map(str, m))} grid)" for c, m in snap)
             print(f"in-degree {k}, N = {n}: best {best['mean_kl']:.4f} ± {best['kl_se']:.4f}"
-                  f" -> {len(top)} of {len(s)} configs{grouped} within {n_se:g} kl_se")
+                  f" -> {len(top)} of {len(s)} configs{grouped} {_threshold(tables)}")
             _show(_for_display(top.drop(columns=[c for c in hidden if c in top])))
     return tables
 
 
 def _threshold(tables):
-    """'within N kl_se' for the tables' threshold (as set in summarise_trials)."""
-    n_se = next(iter(tables.values())).attrs.get("n_se", 1.0) if tables else 1.0
-    return f"within {n_se:g} kl_se"
+    """'within N kl_se' (or rel_tol, params filter) for the tables' threshold
+    (as set in summarise_trials)."""
+    a = next(iter(tables.values())).attrs if tables else {}
+    text = f"within {a.get('n_se', 1.0):g} kl_se"
+    if a.get("rel_tol"):
+        text += f" or {a['rel_tol']:.0%}"
+    if a.get("max_params"):
+        text += ", params " + ", ".join(f"k{k} < {v:,}" for k, v in a["max_params"].items())
+    return text
 
 
 def shared_settings_table(tables, show=True):
@@ -536,8 +570,8 @@ def _config_key(df):
     return df.apply(lambda r: "|".join(norm(c, r[c]) for c in cols), axis=1)
 
 
-def candidate_table(trials, source="candidates", n_se=2.0, tables=None, top_values=None,
-                    show=True):
+def candidate_table(trials, source="candidates", n_se=2.0, rel_tol=0.0, top_values=None,
+                    max_params=None, show=True):
     """Compare chosen configs run on every (in-degree, sample size).
 
     trials : the tuning data (load_trials(RESULTS_DIR)); the rows with
@@ -550,14 +584,16 @@ def candidate_table(trials, source="candidates", n_se=2.0, tables=None, top_valu
              number ("top_idx"), so a final model can be picked as
              top_values.loc[[top_idx]]. Configs not in it have no index and
              are listed last.
+    max_params : {in-degree: limit}, e.g. {10: 50_000}: keep only configs with
+             fewer stored params than the limit at that in-degree ("params k10"
+             < 50000); configs with no params recorded there are dropped.
     One column per (k, N) ("k6 N600"): the config's mean KL over the tuning
-    DAGs. In the printed table, a value is bold if it is within n_se standard
-    errors of the best result *overall* for that (k, N), i.e. among all tuning
-    trials (sweeps and candidates): best mean KL + n_se * its kl_se. That best
-    comes from `tables` (summarise_trials output, so it matches the top-config
-    tables, including FIXED / SNAP grouping) if given, otherwise from every
-    complete trial in `trials`, with kl_se = sqrt(sum of the DAGs' kl_se^2)/n
-    (the DAGs have separate test sets). Rows are sorted by how many columns
+    DAGs. In the printed table, a value is bold if it is close to the best
+    config *in this table* (after max_params) for that (k, N): within n_se of
+    the best's kl_se (statistically indistinguishable; kl_se = sqrt(sum of the
+    DAGs' kl_se^2)/n, the DAGs have separate test sets) or within rel_tol of
+    the best's KL (KL <= best * (1 + rel_tol): practically negligible, e.g.
+    rel_tol=0.02 for 2%), whichever is looser. Rows are sorted by how many columns
     they are bold in, then by average rank. Also listed per config: dropout,
     patience, batch_size, fit_time_s (mean seconds per fit) and stored_params
     per in-degree ("params k6"), since the input layer grows with the number
@@ -576,20 +612,25 @@ def candidate_table(trials, source="candidates", n_se=2.0, tables=None, top_valu
     kl = r.pivot_table(index="_key", columns=cols, values="kl", aggfunc="mean")
     se = r.pivot_table(index="_key", columns=cols, values="kl_se",
                        aggfunc=lambda x: np.sqrt((x ** 2).sum()) / len(x))
-    # threshold per (k, N): best result overall, from all tuning trials
+    params = (r.pivot_table(index="_key", columns="in_degree", values="stored_params",
+                            aggfunc="first")      # depends on in-degree (input size)
+              if "stored_params" in r else pd.DataFrame(index=kl.index))
+    if max_params:
+        keep = pd.Series(True, index=kl.index)
+        for k, cap in max_params.items():
+            if k not in params:
+                raise KeyError(f"no stored_params recorded for in-degree {k}")
+            keep &= (params[k].reindex(kl.index) < cap).fillna(False)
+        kl, se = kl[keep], se.reindex(kl.index)[keep]
+        if kl.empty:
+            print(f"no candidates with max_params={max_params}")
+            return pd.DataFrame()
+    # threshold per (k, N), from the best config in the (filtered) table: within n_se of
+    # its kl_se, or within rel_tol of its KL (relative), whichever is looser
     limit = {}
     for c in kl.columns:
-        if tables is not None and c in tables and len(tables[c]):
-            b = tables[c].iloc[0]                         # summarise_trials: best first
-            limit[c] = b["mean_kl"] + n_se * b["kl_se"]
-            continue
-        g = trials[(trials["in_degree"] == c[0]) & (trials["sample_size"] == c[1])]
-        per = g.groupby("run_id").agg(
-            mean_kl=("kl", "mean"), n=("dag_idx", "nunique"),
-            kl_se=("kl_se", lambda x: np.sqrt((x ** 2).sum()) / len(x)))
-        per = per[per["n"] == per["n"].max()]             # complete trials only
-        b = per.loc[per["mean_kl"].idxmin()]
-        limit[c] = b["mean_kl"] + n_se * b["kl_se"]
+        best = kl[c].idxmin()
+        limit[c] = max(kl.at[best, c] + n_se * se.at[best, c], kl.at[best, c] * (1 + rel_tol))
     near = pd.DataFrame({c: kl[c] <= limit[c] for c in kl.columns})
 
     # row number in top_values, matched by settings
@@ -613,17 +654,15 @@ def candidate_table(trials, source="candidates", n_se=2.0, tables=None, top_valu
             out[c] = by[c].first()
     if "fit_time_s" in r:
         out["fit_time_s"] = by["fit_time_s"].mean()      # mean seconds per fit
-    if "stored_params" in r:                              # depends on in-degree (input size)
-        params = r.pivot_table(index="_key", columns="in_degree", values="stored_params",
-                               aggfunc="first")
-        for k in params.columns:
-            out[f"params k{k}"] = params[k]
+    for k in params.columns:
+        out[f"params k{k}"] = params[k]
     out.index = pd.Index(top_idx.loc[order], name="top_idx" if top_values is not None else None)
     near.index = out.index
     if show:
         print(f"chosen configs on every (in-degree, sample size): mean KL over the tuning DAGs; "
-              f"bold = within {n_se:g} SE of the best result overall (all tuning trials) "
+              f"bold = within {n_se:g} SE or {rel_tol:.0%} of the best config in this table "
               f"for that in-degree and sample size"
+              + (f" (only configs with params {max_params})" if max_params else "")
               + ("; index = row in top_values" if top_values is not None else ""))
         try:
             fmt = {c: "{:.4f}" for c in kl_cols}
