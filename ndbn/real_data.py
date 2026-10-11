@@ -11,7 +11,7 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 from pgmpy.models import DiscreteBayesianNetwork
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, train_test_split
 from tqdm.auto import tqdm
 
 from .evaluation import EPS, cpd_probs
@@ -285,85 +285,179 @@ def make_folds(target, k_folds, seed):
     return list(skf.split(np.zeros(len(target)), target))
 
 
-def _real_job(job, data_by_level, dags, cards_by_level, folds, estimators, n_train,
-              nn_max_n, val_frac, n_epochs, seed, n_jobs):
-    """Every (N, estimator) still to do for one (discretisation, DAG, fold)."""
-    disc, dag_level, fold = job["disc_level"], job["dag_level"], job["fold"]
-    data, G, cards = data_by_level[disc], dags[dag_level], cards_by_level[disc]
-    train_idx, test_idx = folds[fold]
-    test_df = data.iloc[test_idx].reset_index(drop=True)
-    # one permutation per fold: each N takes its first N rows, so the
-    # subsamples are nested (the N=500 rows are inside the N=2000 rows)
-    perm = np.random.default_rng(make_seed("subsample", seed, fold)).permutation(train_idx)
+def part_sizes(n, fracs):
+    """Rows of an n-row dataset in each of (train, val, test); sums to n."""
+    n_tr, n_va = round(n * fracs[0]), round(n * fracs[1])
+    return n_tr, n_va, n - n_tr - n_va
 
-    records = []
-    for n in n_train:
-        spec = n_spec(n)
-        todo = [e for e in estimators if (spec, e["name"]) in job["todo"]]
-        if not todo:
-            continue
+
+def make_blocks(target, n_max, n_repeats, seed, fracs=(0.6, 0.2, 0.2)):
+    """Disjoint repeats, each a fixed train / val / test partition.
+
+    All rows are shuffled once (seeded) and cut into n_repeats disjoint blocks
+    of n_max rows; each block is split once, stratified on the target, into
+    train / val / test parts in `fracs` proportions, each part in random order.
+    A smaller N takes the first rows of each part (part_sizes(N, fracs)), so
+    within a repeat the subsets are random, nested across N, and a row never
+    changes role. Because the blocks are disjoint, no repeat's test rows are
+    another repeat's train or val rows, so validation scores can be pooled
+    across repeats without touching any test data.
+    -> list of {"train", "val", "test"} index arrays, one per repeat.
+    """
+    target = np.asarray(target)
+    if n_repeats * n_max > len(target):
+        raise ValueError(f"{n_repeats} repeats x {n_max} rows > {len(target)} rows")
+    perm = np.random.default_rng(make_seed("fold", seed, n_max)).permutation(len(target))
+    n_tr, n_va, n_te = part_sizes(n_max, fracs)
+    blocks = []
+    for r in range(n_repeats):
+        idx = perm[r * n_max:(r + 1) * n_max]
+        rs = make_seed("split", seed, n_max, r) % 2**32
+        rest, test = train_test_split(idx, test_size=n_te, stratify=target[idx], random_state=rs)
+        train, val = train_test_split(rest, test_size=n_va, stratify=target[rest], random_state=rs)
+        blocks.append({"train": train, "val": val, "test": test})
+    used = np.concatenate([np.concatenate(list(b.values())) for b in blocks])
+    assert len(np.unique(used)) == len(used), "blocks / parts overlap"
+    return blocks
+
+
+def _parts(job, n, data, folds, blocks, fracs, val_frac, seed):
+    """(sample, train_df, val_df, test_df, seeds) for one job at size n.
+
+    kfold: as before (nested subsample of the training fold, split into
+    train/val; the whole test fold). blocks: the first rows of each part of
+    the repeat's block, so every N is split train/val/test in `fracs`.
+    sample = train + val: what the tabular estimators fit on.
+    """
+    if blocks is None:
+        fold = job["fold"]
+        train_idx, test_idx = folds[fold]
+        # one permutation per fold: each N takes its first N rows, so the
+        # subsamples are nested (the N=500 rows are inside the N=2000 rows)
+        perm = np.random.default_rng(make_seed("subsample", seed, fold)).permutation(train_idx)
         sample = data.iloc[perm if n is None else perm[:n]].reset_index(drop=True)
         split_seed = make_seed("split", seed, fold, len(sample))
         nn_seed = make_seed("nn", seed, fold, len(sample))
         # NN validation set comes out of the subsample; the test fold is never touched
         train_df, val_df = split_train_val(sample, val_frac=val_frac, seed=split_seed)
-        unseen, node_unseen = unseen_config_rate(G, sample, test_df)
+        test_df = data.iloc[test_idx].reset_index(drop=True)
+        return sample, train_df, val_df, test_df, split_seed, nn_seed
+    b = blocks[job["fold"]]
+    n_tr, n_va, n_te = part_sizes(n, fracs)
+    train_df = data.iloc[b["train"][:n_tr]].reset_index(drop=True)
+    val_df = data.iloc[b["val"][:n_va]].reset_index(drop=True)
+    test_df = data.iloc[b["test"][:n_te]].reset_index(drop=True)
+    sample = pd.concat([train_df, val_df], ignore_index=True)
+    return sample, train_df, val_df, test_df, np.nan, make_seed("nn", seed, job["fold"], n)
+
+
+def _ests(estimators, disc, dag_level, spec):
+    """Estimators for one (discretisation, DAG, N): a list (the same
+    everywhere) or a dict keyed (disc, dag, spec) (run_selected)."""
+    if isinstance(estimators, dict):
+        return estimators.get((disc, dag_level, spec), [])
+    return estimators
+
+
+def _real_job(job, data_by_level, dags, cards_by_level, folds, estimators, n_train,
+              nn_max_n, val_frac, n_epochs, seed, n_jobs, blocks=None,
+              split_fracs=(0.6, 0.2, 0.2), score_test=True):
+    """Every (N, estimator) still to do for one (discretisation, DAG, fold or
+    repeat). score_test=False (tuning) computes no test-set quantity at all."""
+    disc, dag_level, fold = job["disc_level"], job["dag_level"], job["fold"]
+    data, G, cards = data_by_level[disc], dags[dag_level], cards_by_level[disc]
+
+    records = []
+    for n in n_train:
+        spec = n_spec(n)
+        todo = [e for e in _ests(estimators, disc, dag_level, spec)
+                if (spec, e["name"]) in job["todo"]]
+        if not todo:
+            continue
+        sample, train_df, val_df, test_df, split_seed, nn_seed = _parts(
+            job, n, data, folds, blocks, split_fracs, val_frac, seed)
+        if score_test:
+            unseen, node_unseen = unseen_config_rate(G, sample, test_df)
 
         for est in todo:
             is_nn = est["type"] == "nn"
             model, fit_time, cpu_time, rss = fit_estimator(
                 est, G, sample, train_df, val_df, cards, n_epochs, seed=nn_seed)
-            ll, se, node_ll, floored = held_out_logprob(model, test_df, cards,
-                                                        return_floored=True)
-            records.append({
+            # validation score (selection): NNs are already fitted on train only;
+            # tabular estimators are refitted on train only for it
+            val_model = model if is_nn else fit_estimator(
+                est, G, train_df, train_df, val_df, cards, n_epochs, seed=nn_seed)[0]
+            vll, vse, _ = held_out_logprob(val_model, val_df, cards)
+            rec = {
                 "disc_level":   disc,
                 "dag_level":    dag_level,
-                "fold":         fold,
+                "fold":         fold,                   # repeat index for split="blocks"
                 "n_train_spec": spec,
                 "estimator":    est["name"],
+                "family":       est.get("family", est["name"]),
+                "selected_config": est.get("selected_config", ""),
                 "type":         est["type"],
                 "hidden_dims":  str(list(est.get("hidden_dims", []))) if is_nn else "",
                 "activation":   activation_name(est) if is_nn else "",
+                "lr":           est.get("lr", np.nan) if is_nn else np.nan,
                 "pseudo_count": est.get("pseudo_count", 0.5) if est["type"] == "dirichlet" else np.nan,
-                "sample_size":  len(sample),                        # budget
+                "split":        "kfold" if blocks is None else "blocks",
+                "sample_size":  len(sample) + (0 if blocks is None else len(test_df)),  # rows in the dataset
                 "n_fit":        len(train_df) if is_nn else len(sample),
+                "n_val":        len(val_df),
                 "n_test":       len(test_df),
                 "n_edges":      G.number_of_edges(),
                 "seed":         seed,
                 "split_seed":   split_seed,
                 "nn_seed":      nn_seed,
-                "loglik":       ll,                                 # mean per test row
-                "loglik_se":    se,
-                "n_floored":    int(sum(floored.values())),         # zero-prob hits
-                "unseen_rate":  unseen,         # test rows with >=1 unseen parent config
-                "node_loglik":  json.dumps(node_ll),
-                "node_unseen":  json.dumps(node_unseen),
-                "node_floored": json.dumps(floored),
+                "val_loglik":   vll,                                # mean per validation row
+                "val_loglik_se": vse,
                 "fit_time_s":   fit_time,
                 "fit_cpu_s":    cpu_time,
                 "fit_rss_delta_bytes": rss,
                 **model_stats(model, est.get("n_epochs", n_epochs)),
                 **run_settings(n_jobs),
-            })
+            }
+            if score_test:
+                ll, se, node_ll, floored = held_out_logprob(model, test_df, cards,
+                                                            return_floored=True)
+                rec.update({
+                    "loglik":       ll,                             # mean per test row
+                    "loglik_se":    se,
+                    "n_floored":    int(sum(floored.values())),     # zero-prob hits
+                    "unseen_rate":  unseen,     # test rows with >=1 unseen parent config
+                    "node_loglik":  json.dumps(node_ll),
+                    "node_unseen":  json.dumps(node_unseen),
+                    "node_floored": json.dumps(floored),
+                })
+            records.append(rec)
     return records
 
 
 def run_real_experiments(raw_df, disc_levels, dag_paths, estimators, n_train, k_folds,
                          nn_max_n, val_frac, n_epochs, results_dir,
                          results_name="results.csv", folds_to_run=None, seed=0,
-                         verbose=True, n_jobs=1, device=None, torch_threads=None):
-    """Every estimator on every (discretisation, DAG, fold, N), appending rows
-    to <results_dir>/<results_name>.
+                         verbose=True, n_jobs=1, device=None, torch_threads=None,
+                         split="kfold", n_max=None, n_repeats=None,
+                         split_fracs=(0.6, 0.2, 0.2), score_test=True):
+    """Every estimator on every (discretisation, DAG, fold/repeat, N), appending
+    rows to <results_dir>/<results_name>.
 
     raw_df     : load_cdc() output; discretised here per level.
     dag_paths  : DAG level ("high", ...) -> Bayesys CSV.
-    n_train    : training-set sizes per fold; None = the whole training fold.
+    estimators : list of estimator dicts, or {(disc, dag, n_spec): [dicts]}.
+    n_train    : sizes; kfold: training rows (None = whole training fold);
+                 blocks: rows in the whole dataset, split train/val/test.
     nn_max_n   : NN estimators are skipped above this N (and for None).
-    folds_to_run : subset of fold indices (e.g. [0] for a smoke run); folds
-                 are always made with k_folds, so fold 0 is the same fold.
+    split      : "kfold" (k_folds stratified folds; N = training rows, val_frac
+                 of them for NN early stopping) or "blocks" (make_blocks:
+                 n_repeats disjoint blocks of n_max rows, each N split
+                 train/val/test in split_fracs; N = the whole dataset).
+    folds_to_run : subset of fold / repeat indices (e.g. [0] for a smoke run).
+    score_test : False for tuning: rows hold validation scores only.
     Resumable on (disc_level, dag_level, fold, n_train_spec, estimator).
     n_jobs, device, torch_threads : as experiments.run_experiments; one job
-    is one (discretisation, DAG, fold).
+    is one (discretisation, DAG, fold/repeat).
     """
     os.makedirs(results_dir, exist_ok=True)
     results_csv = os.path.join(results_dir, results_name)
@@ -377,8 +471,16 @@ def run_real_experiments(raw_df, disc_levels, dag_paths, estimators, n_train, k_
     for lvl in disc_levels:
         data_by_level[lvl], cards_by_level[lvl] = discretise(raw_df, lvl)
     dags = {lvl: load_bayesys_dag(p, columns) for lvl, p in dag_paths.items()}
-    folds = make_folds(raw_df[TARGET].to_numpy(), k_folds, seed)
-    folds_to_run = range(k_folds) if folds_to_run is None else folds_to_run
+    target = raw_df[TARGET].to_numpy()
+    if split == "kfold":
+        folds, blocks, n_units = make_folds(target, k_folds, seed), None, k_folds
+    elif split == "blocks":
+        if any(n is None or n > n_max for n in n_train):
+            raise ValueError(f"split='blocks' needs every N <= n_max={n_max}")
+        folds, blocks, n_units = None, make_blocks(target, n_max, n_repeats, seed, split_fracs), n_repeats
+    else:
+        raise ValueError(f"unknown split {split!r}")
+    folds_to_run = range(n_units) if folds_to_run is None else folds_to_run
 
     def wanted(est, n):
         return est["type"] != "nn" or (n is not None and n <= nn_max_n)
@@ -388,7 +490,8 @@ def run_real_experiments(raw_df, disc_levels, dag_paths, estimators, n_train, k_
     for fold in folds_to_run:
         for disc in disc_levels:
             for dag_level in dag_paths:
-                todo = {(n_spec(n), e["name"]) for n in n_train for e in estimators
+                todo = {(n_spec(n), e["name"]) for n in n_train
+                        for e in _ests(estimators, disc, dag_level, n_spec(n))
                         if wanted(e, n) and
                         (disc, dag_level, str(fold), n_spec(n), e["name"]) not in done}
                 if todo:
@@ -400,7 +503,8 @@ def run_real_experiments(raw_df, disc_levels, dag_paths, estimators, n_train, k_
     run_job = partial(_real_job, data_by_level=data_by_level, dags=dags,
                       cards_by_level=cards_by_level, folds=folds, estimators=estimators,
                       n_train=n_train, nn_max_n=nn_max_n, val_frac=val_frac,
-                      n_epochs=n_epochs, seed=seed, n_jobs=n_jobs)
+                      n_epochs=n_epochs, seed=seed, n_jobs=n_jobs, blocks=blocks,
+                      split_fracs=split_fracs, score_test=score_test)
     records = []
     bar = tqdm(total=len(jobs), desc="(disc, DAG, fold)")
     for recs in _parallel_map(run_job, jobs, n_jobs, device, torch_threads):
@@ -411,6 +515,38 @@ def run_real_experiments(raw_df, disc_levels, dag_paths, estimators, n_train, k_
         flush(records, results_csv)
         bar.update()
     bar.close()
+
+
+def select_real_configs(tuning, metric="val_loglik"):
+    """One candidate per (discretisation, DAG, N, family): the highest mean
+    validation log-likelihood across repeats. Uses validation scores only,
+    and with split="blocks" the repeats are disjoint, so no test row of any
+    repeat informs the choice; the winner is then used in every repeat.
+    -> one row per group: selected_config, its mean and SE, the runner-up's
+    gap, and how many repeats the mean rests on."""
+    keys = ["disc_level", "dag_level", "n_train_spec", "family"]
+    g = (tuning.groupby(keys + ["estimator"])[metric]
+               .agg(mean="mean", se="sem", n_repeats="count").reset_index()
+               .sort_values(keys + ["mean"], ascending=[True] * len(keys) + [False]))
+    best = g.groupby(keys).head(1).rename(columns={"estimator": "selected_config"})
+    second = g.groupby(keys)["mean"].apply(lambda m: m.iloc[1] if len(m) > 1 else np.nan)
+    best = best.merge(second.rename("runner_up_mean").reset_index(), on=keys)
+    best["gap_to_runner_up"] = best["mean"] - best["runner_up_mean"]
+    return best.reset_index(drop=True)
+
+
+def run_selected(raw_df, selection, candidates, **kwargs):
+    """Refit each selected candidate and score it on the test sets, written
+    under its family name with `selected_config` set. Same rows and seeds as
+    the tuning run, so each fit reproduces its tuning fit exactly.
+    kwargs : as run_real_experiments (same split settings as the tuning)."""
+    by_name = {c["name"]: c for c in candidates}
+    chosen = {}
+    for r in selection.itertuples():
+        c = by_name[r.selected_config]
+        chosen.setdefault((r.disc_level, r.dag_level, r.n_train_spec), []).append(
+            {**c, "name": c["family"], "selected_config": c["name"]})
+    run_real_experiments(raw_df, estimators=chosen, score_test=True, **kwargs)
 
 
 def node_table(results, dag_paths, raw_df):
