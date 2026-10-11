@@ -831,14 +831,38 @@ def arms_from_configs(configs):
     return arms
 
 
-def save_chosen_configs(configs, path):
+def get_configs(top_values, names):
+    """Rows of top_values (plotting.top_config_values) by run_name, in the given
+    order, e.g. get_configs(top_values, ["30_256_lr3e-4"]). Row numbers change
+    when trials are added, names don't, so this keeps a selection stable. A
+    name may also be the arm name with its run_id prefix ("12_256_ab3f"), as
+    arms_from_configs makes for repeated run_names. Raises KeyError if a name
+    matches no row or more than one (a row's name can change when a better
+    trial with the same settings is merged in)."""
+    arm = top_values["run_name"].astype(str) + "_" + top_values["run_id"].astype(str).str[:4]
+    rows = []
+    for n in names:
+        m = top_values.index[top_values["run_name"] == n]
+        if len(m) == 0:
+            m = top_values.index[arm == n]
+        if len(m) != 1:
+            raise KeyError(f"{n!r} matches {len(m)} rows of top_values; run_names: "
+                           f"{list(top_values['run_name'])}")
+        rows.append(m[0])
+    return top_values.loc[rows]
+
+
+def save_chosen_configs(configs, path, overwrite=False):
     """Save the final NN config(s) for the main experiments to JSON.
 
     configs : rows of plotting.top_config_values (e.g. top_values.loc[[3]]) or
               a list of config dicts. They are converted with arms_from_configs,
               stored with the activation by name, and with a note of which
-              top_values rows they came from, so the choice stays fixed even
-              if the indices change later. Read back with load_chosen_configs.
+              top_values rows they came from. Read back with load_chosen_configs.
+    overwrite : top_values row numbers change when trials are added (or N_SE /
+              SNAP change), so re-running the same selection later can pick
+              different configs. If `path` already holds a different choice it
+              is kept (and both are printed) unless overwrite=True.
     """
     import datetime
     rows = list(configs.index) if isinstance(configs, pd.DataFrame) else None
@@ -850,6 +874,17 @@ def save_chosen_configs(configs, path):
                          if k not in ("activation", "hidden_dims")},
                       "hidden_dims": [int(h) for h in a.get("hidden_dims", ())],
                       "activation": None if act is None else act.__name__})
+    if os.path.exists(path) and not overwrite:
+        with open(path) as f:
+            old = json.load(f)["configs"]
+        settings = lambda cs: [{k: v for k, v in c.items() if k != "name"} for c in cs]
+        if settings(old) == settings(saved):
+            print(f"{path} already holds these config(s): {[c['name'] for c in old]}")
+            return old
+        print(f"NOT saved: {path} already holds a different choice "
+              f"{[c['name'] for c in old]}, this selection is {[c['name'] for c in saved]} "
+              "(top_values row numbers may have changed). Pass overwrite=True to replace it.")
+        return old
     doc = {"configs": saved,
            "chosen_from": {"top_values_rows": [int(i) for i in rows] if rows else None,
                            "saved": datetime.datetime.now().isoformat(timespec="seconds")}}
