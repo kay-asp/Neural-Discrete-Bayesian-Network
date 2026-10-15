@@ -190,6 +190,19 @@ def activation_name(est):
     return "linear" if est["activation"] is None else est["activation"].__name__
 
 
+def estimator_config_id(est, n_epochs):
+    """plotting.config_id of the settings an NN entry of ESTIMATORS is fitted
+    with (unset ones take the defaults fit_estimator uses), so main-experiment
+    rows match hparam_trials.csv and chosen_nn.json; "" for tabular ones."""
+    if est["type"] != "nn":
+        return ""
+    from .plotting import config_id      # here, not at the top: workers don't need matplotlib
+    return config_id({**{x: est.get(x, d) for x, d in NN_HPARAMS.items()},
+                      "n_epochs": est.get("n_epochs", n_epochs),
+                      "hidden_dims": list(est.get("hidden_dims", [])),
+                      "activation": activation_name(est)})
+
+
 def fit_estimator(est, G, sample, train_df, val_df, cards, n_epochs, seed):
     """Fit one entry of ESTIMATORS -> (model, wall_s, cpu_s, rss_delta_bytes).
 
@@ -271,6 +284,7 @@ def _run_dag_job(job, estimators, sample_sizes, card, val_frac, n_test, n_epochs
             n_fit = len(train_df) if is_nn else len(sample)
             records.append({
                 "estimator":   est["name"],
+                "config_id":   estimator_config_id(est, n_epochs),   # "" for tabular
                 "hidden_dims": str(list(est.get("hidden_dims", []))) if is_nn else "",
                 "activation":  activation_name(est) if is_nn else "",
                 "dag_idx":     dag,
@@ -548,12 +562,13 @@ def _score_config(run, run_id, run_name, sweep_id, source, settings, hidden_dims
     rows = list(_parallel_map(run_cell, jobs, n_jobs, device, torch_threads))
     rows.sort(key=lambda r: (r["in_degree"], r["dag_idx"], r["sample_size"]))
 
+    from .plotting import config_id      # here, not at the top: workers don't need matplotlib
     for r in rows:
         # settings first, then the cell's own columns (they win on a clash,
         # e.g. the cell's sample_size over the trial's sample_sizes list)
         r.update({**{x: v for x, v in settings.items() if x not in r},
-                  "run_id": run_id, "run_name": run_name, "sweep_id": sweep_id,
-                  "source": source, "n_cells": len(rows)})
+                  "run_id": run_id, "run_name": run_name, "config_id": config_id(r),
+                  "sweep_id": sweep_id, "source": source, "n_cells": len(rows)})
 
     cells = pd.DataFrame(rows)
     metrics = {
@@ -678,7 +693,7 @@ def run_configs(configs, k_values, n_dags, n_nodes, alpha, sample_sizes, card, v
                 skip_existing=True, n_jobs=1, device=None, torch_threads=None):
     """Run chosen configs exactly like sweep trials and add them to the tuning data.
 
-    configs : rows of plotting.top_config_values (e.g. top_values.loc[[0, 3]]),
+    configs : rows of top_values from plotting.summarise_trials (e.g. get_configs(top_values, names)),
               or a list of dicts as run_sweep arms take them: "name", "hidden_dims"
               (tuple), "activation" (nn class or None) and any NN_HPARAMS
               (lr, weight_decay, dropout, patience, batch_size, optimizer,
@@ -697,12 +712,13 @@ def run_configs(configs, k_values, n_dags, n_nodes, alpha, sample_sizes, card, v
     wandb_project : log each run to this W&B project (the sweeps' project),
               tagged `tag`; None skips W&B.
     skip_existing : skip a (config, in-degree) that already has rows from
-              `source` for every cell in trial_csv, so re-running only adds
+              `source` for every cell in trial_csv (matched by config_id, so
+              the same settings under another name count as already run), so re-running only adds
               what's missing. Returns one row of summary metrics per run.
     """
     import uuid
 
-    if isinstance(configs, pd.DataFrame):          # rows of plotting.top_config_values
+    if isinstance(configs, pd.DataFrame):          # rows of summarise_trials' top_values
         configs = arms_from_configs(configs)
     names = [c["name"] for c in configs]
     if len(set(names)) != len(names):
@@ -713,14 +729,19 @@ def run_configs(configs, k_values, n_dags, n_nodes, alpha, sample_sizes, card, v
     where = {k: _resolve_sweep(sid, wandb_project) for k, sid in sweep_ids.items()
              if wandb_project is not None and k in k_values}
 
-    # (config name, in-degree) pairs already complete in the tuning data
+    # (config_id, in-degree) pairs already complete in the tuning data: matched by
+    # settings, so a config already run under another name is skipped too
+    from .plotting import add_config_ids, config_id
     have = {}
+    # run_ids already in the tuning data (see the duplicate check below)
+    used_ids = (set(pd.read_csv(trial_csv, usecols=["run_id"])["run_id"].astype(str))
+                if os.path.exists(trial_csv) else set())
     if skip_existing and os.path.exists(trial_csv):
-        old = pd.read_csv(trial_csv)
+        old = add_config_ids(pd.read_csv(trial_csv))
         if "source" in old:
             old = old[(old["source"] == source) & old["sample_size"].isin(sample_sizes)]
-            have = (old.drop_duplicates(["run_name", "in_degree", "dag_idx", "sample_size"])
-                       .groupby(["run_name", "in_degree"]).size().to_dict())
+            have = (old.drop_duplicates(["config_id", "in_degree", "dag_idx", "sample_size"])
+                       .groupby(["config_id", "in_degree"]).size().to_dict())
 
     results = []
     for cfg in tqdm(configs, desc="configs"):
@@ -729,8 +750,12 @@ def run_configs(configs, k_values, n_dags, n_nodes, alpha, sample_sizes, card, v
         activation = cfg.get("activation", nn.ReLU) if hidden_dims else None
         kw = {x: cfg[x] for x in NN_HPARAMS if x in cfg}
         kw.setdefault("n_epochs", NN_HPARAMS["n_epochs"])
+        # the config_id its rows would get (same settings as _trial_cell writes)
+        cid = config_id({"hidden_dims": hidden_dims,
+                         "activation": "linear" if activation is None else activation.__name__,
+                         **{x: kw.get(x, d) for x, d in NN_HPARAMS.items()}})
         for ks in groups:
-            if all(have.get((name, k), 0) >= n_dags * len(sample_sizes) for k in ks):
+            if all(have.get((cid, k), 0) >= n_dags * len(sample_sizes) for k in ks):
                 tqdm.write(f"{name} k={ks}: already in {os.path.basename(trial_csv)}, skipped")
                 continue
             sweep = where.get(ks[0]) if len(ks) == 1 else None     # (entity, project, id)
@@ -774,6 +799,11 @@ def run_configs(configs, k_values, n_dags, n_nodes, alpha, sample_sizes, card, v
                     tqdm.write(f"warning: W&B did not attach run {name} (k={ks[0]}) to sweep "
                                f"{sweep[2]}; it is logged in {sweep[0]}/{sweep[1]} with tag {tag!r}")
             run_id = run.id if run is not None else uuid.uuid4().hex[:8]
+            # W&B can hand the same run to several configs (seen when attaching to a
+            # sweep fails); keep every config's rows under its own run_id
+            if run_id in used_ids:
+                run_id = f"{run_id}_{uuid.uuid4().hex[:4]}"
+            used_ids.add(run_id)
             metrics = _score_config(
                 run, run_id, name, sweep_id, source, settings, hidden_dims, activation, kw,
                 ks, n_dags, n_nodes, alpha, sample_sizes, card, val_frac, results_dir,
@@ -802,7 +832,7 @@ def _rename_wandb_run(entity, project, run_id, name):
 
 
 def arms_from_configs(configs):
-    """Rows of settings (e.g. plotting.top_config_values output) -> run_sweep arms.
+    """Rows of settings (e.g. summarise_trials' top_values) -> run_sweep arms.
 
     Each row needs run_name and hidden_dims ("[256, 128]" or a tuple); any of
     activation ("ReLU", "linear", ...), lr, weight_decay, dropout, patience,
@@ -832,62 +862,138 @@ def arms_from_configs(configs):
 
 
 def get_configs(top_values, names):
-    """Rows of top_values (plotting.top_config_values) by run_name, in the given
-    order, e.g. get_configs(top_values, ["30_256_lr3e-4"]). Row numbers change
+    """Rows of top_values (from plotting.summarise_trials) by run_name or
+    config_id, in the given order, e.g. get_configs(top_values,
+    ["30_256_lr3e-4", "a1b2c3d4"]). Row numbers change
     when trials are added, names don't, so this keeps a selection stable. A
     name may also be the arm name with its run_id prefix ("12_256_ab3f"), as
-    arms_from_configs makes for repeated run_names. Raises KeyError if a name
-    matches no row or more than one (a row's name can change when a better
-    trial with the same settings is merged in)."""
+    arms_from_configs makes for repeated run_names, or the name of any trial
+    merged into a row (its run_names), since a row's run_name label can change
+    when the tables change. The returned rows are labelled with the requested
+    names (run_name), so arm names stay the same and run_configs still skips
+    configs already run; a config_id (any of a row's config_ids) is labelled
+    with the name of that config's best trial. Raises KeyError if a name matches no row (e.g. the
+    config is no longer in any table) or more than one. Names that select a
+    row already selected (e.g. two config_ids that become the same config
+    after FIXED / SNAP) are skipped with a note, so each config runs once."""
     arm = top_values["run_name"].astype(str) + "_" + top_values["run_id"].astype(str).str[:4]
-    rows = []
+    none = pd.Series([()] * len(top_values), index=top_values.index)
+    merged = top_values.get("run_names", none)
+    ids = top_values.get("config_ids", none)
+    rows, labels, kept = [], [], []
     for n in names:
         m = top_values.index[top_values["run_name"] == n]
         if len(m) == 0:
             m = top_values.index[arm == n]
+        if len(m) == 0:
+            m = top_values.index[merged.map(lambda ns: n in ns).astype(bool)]
+        by_id = len(m) == 0
+        if by_id:
+            m = top_values.index[ids.map(lambda cs: n in cs).astype(bool)]
         if len(m) != 1:
             raise KeyError(f"{n!r} matches {len(m)} rows of top_values; run_names: "
                            f"{list(top_values['run_name'])}")
+        if m[0] in rows:      # e.g. two config_ids that are the same config after tidying
+            print(f"{n!r} is the same config as {kept[rows.index(m[0])]!r} after tidying "
+                  f"(FIXED / SNAP): selected once")
+            continue
         rows.append(m[0])
-    return top_values.loc[rows]
+        kept.append(n)
+        # label: the requested name; for a config_id, the name of that config's best
+        # trial; for an arm name "<run_name>_<run_id[:4]>", the row's run_name
+        rn, ri = top_values.at[m[0], "run_name"], top_values.at[m[0], "run_id"]
+        if by_id:
+            labels.append(top_values.at[m[0], "id_names"].get(n, rn)
+                          if "id_names" in top_values else rn)
+        else:
+            labels.append(rn if n == f"{rn}_{str(ri)[:4]}" else n)
+    out = top_values.loc[rows].copy()
+    out["run_name"] = labels
+    out["requested"] = kept       # what was asked for (save_chosen_configs compares ids)
+    return out
 
 
-def save_chosen_configs(configs, path, overwrite=False):
+def save_chosen_configs(configs, path, overwrite=False, trials=None, params_k=10):
     """Save the final NN config(s) for the main experiments to JSON.
 
-    configs : rows of plotting.top_config_values (e.g. top_values.loc[[3]]) or
+    configs : rows of top_values from plotting.summarise_trials or
               a list of config dicts. They are converted with arms_from_configs,
-              stored with the activation by name, and with a note of which
-              top_values rows they came from. Read back with load_chosen_configs.
-    overwrite : top_values row numbers change when trials are added (or N_SE /
-              SNAP change), so re-running the same selection later can pick
-              different configs. If `path` already holds a different choice it
-              is kept (and both are printed) unless overwrite=True.
+              stored with the activation by name. Each is named after its
+              hidden layers, "nn_32_32" for [32, 32] (the estimator name in the
+              main experiments; "_<config_id[:4]>" is added if two chosen
+              configs share hidden layers), and gets a config_id field: the id
+              of the exact settings it runs (plotting.config_id, as written to
+              hparam_trials.csv). A config picked by a config_id whose settings
+              FIXED / SNAP change runs as a different config: a note says so,
+              with the changed settings when `trials` is given. Read back with
+              load_chosen_configs.
+    overwrite : if `path` already holds a different choice it is kept (and
+              both are printed) unless overwrite=True, so re-running the
+              notebook never changes the final model by accident.
+    trials  : the tuning data (plotting.load_trials), filtered to your card
+              (params depend on it). If given, each config also gets
+              max_params_k10 (for params_k=10): the largest total stored_params
+              of its architecture (hidden_dims) over the tuning runs at that
+              in-degree; None if it never ran there.
     """
-    import datetime
-    rows = list(configs.index) if isinstance(configs, pd.DataFrame) else None
+    from .plotting import config_id
     arms = arms_from_configs(configs) if isinstance(configs, pd.DataFrame) else list(configs)
     saved = []
     for a in arms:
         act = a.get("activation")
-        saved.append({**{k: (v.item() if hasattr(v, "item") else v) for k, v in a.items()
-                         if k not in ("activation", "hidden_dims")},
-                      "hidden_dims": [int(h) for h in a.get("hidden_dims", ())],
-                      "activation": None if act is None else act.__name__})
+        hd = [int(h) for h in a.get("hidden_dims", ())]
+        settings = {**{k: (v.item() if hasattr(v, "item") else v) for k, v in a.items()
+                       if k not in ("name", "activation", "hidden_dims")},
+                    "hidden_dims": hd, "activation": None if act is None else act.__name__}
+        # the id its rows would get: unset settings take the defaults the fit uses
+        cid = config_id({**NN_HPARAMS, **settings,
+                         "activation": settings["activation"] or "linear"})
+        entry = {"name": "nn_" + ("_".join(map(str, hd)) or "linear"), "config_id": cid}
+        if trials is not None:       # total params of this architecture at in-degree params_k
+            at_k = trials[(trials["in_degree"] == params_k)
+                          & (trials["hidden_dims"].astype(str) == str(hd))]
+            entry[f"max_params_k{params_k}"] = (int(at_k["stored_params"].max())
+                                                if len(at_k) else None)
+        saved.append({**entry, **settings})
+    # a picked config_id whose settings change under FIXED / SNAP runs as another config:
+    # say so, with what changed (from trials, if given)
+    requested = (list(configs["requested"]) if isinstance(configs, pd.DataFrame)
+                 and "requested" in configs else [None] * len(saved))
+    for req, c in zip(requested, saved):
+        if req is None or req == c["config_id"]:
+            continue
+        rows = trials[trials["config_id"] == req] if trials is not None else []
+        if len(rows) == 0:               # not a config_id (a run name), or no trials given
+            if trials is None and len(str(req)) == 8:
+                print(f"note: {req!r} is saved as {c['name']} with config_id "
+                      f"{c['config_id']} (settings changed by FIXED / SNAP)")
+            continue
+        raw = rows.iloc[0]
+        changes = [f"{k} {raw[k]} -> {c[k]}" for k in ("hidden_dims", "lr", "weight_decay",
+                                                        "dropout", "patience", "batch_size",
+                                                        "optimizer", "n_epochs")
+                   if k in raw and k in c and str(raw[k]) != str(c[k])
+                   and not (k == "hidden_dims" and str(raw[k]) == str(list(c[k])))]
+        print(f"note: {req!r} runs as {c['config_id']} ({c['name']}) after FIXED / SNAP"
+              + (f": {', '.join(changes)}" if changes else ""))
+    names = [c["name"] for c in saved]
+    for c in saved:                  # estimator names must be unique
+        if names.count(c["name"]) > 1:
+            c["name"] = f"{c['name']}_{c['config_id'][:4]}"
     if os.path.exists(path) and not overwrite:
         with open(path) as f:
             old = json.load(f)["configs"]
-        settings = lambda cs: [{k: v for k, v in c.items() if k != "name"} for c in cs]
+        settings = lambda cs: [{k: v for k, v in c.items()
+                                if k not in ("name", "config_id") and not k.startswith("max_params")}
+                               for c in cs]
         if settings(old) == settings(saved):
             print(f"{path} already holds these config(s): {[c['name'] for c in old]}")
             return old
         print(f"NOT saved: {path} already holds a different choice "
-              f"{[c['name'] for c in old]}, this selection is {[c['name'] for c in saved]} "
-              "(top_values row numbers may have changed). Pass overwrite=True to replace it.")
+              f"{[c['name'] for c in old]}, this selection is {[c['name'] for c in saved]}. "
+              "Pass overwrite=True to replace it.")
         return old
-    doc = {"configs": saved,
-           "chosen_from": {"top_values_rows": [int(i) for i in rows] if rows else None,
-                           "saved": datetime.datetime.now().isoformat(timespec="seconds")}}
+    doc = {"configs": saved}
     with open(path, "w") as f:
         json.dump(doc, f, indent=2)
     print(f"saved {len(saved)} config(s) to {path}: {[c['name'] for c in saved]}")

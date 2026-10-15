@@ -1,10 +1,12 @@
 {
   "configs": [
     {
-      "name": "01_256x128_lr3e-4",
+      "name": "nn_256_128",
+      "config_id": "76cb8405",
+      "max_params_k10": 742696,
       "lr": 0.0003,
       "weight_decay": 0.01,
-      "dropout": 0.0,
+      "dropout": 0.1,
       "patience": 20,
       "batch_size": 128,
       "optimizer": "adamw",
@@ -16,7 +18,25 @@
       "activation": "ReLU"
     },
     {
-      "name": "k6_128_64_9",
+      "name": "nn_256",
+      "config_id": "7589813f",
+      "max_params_k10": 89896,
+      "lr": 0.0006,
+      "weight_decay": 0.01,
+      "dropout": 0.1,
+      "patience": 50,
+      "batch_size": 128,
+      "optimizer": "adamw",
+      "n_epochs": 1000,
+      "hidden_dims": [
+        256
+      ],
+      "activation": "ReLU"
+    },
+    {
+      "name": "nn_128_64",
+      "config_id": "5770cf4b",
+      "max_params_k10": 207528,
       "lr": 0.0003,
       "weight_decay": 0.01,
       "dropout": 0.1,
@@ -29,13 +49,55 @@
         64
       ],
       "activation": "ReLU"
+    },
+    {
+      "name": "nn_128",
+      "config_id": "ccbfffbc",
+      "max_params_k10": 44968,
+      "lr": 0.0006,
+      "weight_decay": 0.01,
+      "dropout": 0.1,
+      "patience": 50,
+      "batch_size": 128,
+      "optimizer": "adamw",
+      "n_epochs": 1000,
+      "hidden_dims": [
+        128
+      ],
+      "activation": "ReLU"
+    },
+    {
+      "name": "nn_64_32",
+      "config_id": "34bc3fa8",
+      "max_params_k10": 62824,
+      "lr": 0.0006,
+      "weight_decay": 0.01,
+      "dropout": 0.1,
+      "patience": 50,
+      "batch_size": 128,
+      "optimizer": "adamw",
+      "n_epochs": 1000,
+      "hidden_dims": [
+        64,
+        32
+      ],
+      "activation": "ReLU"
+    },
+    {
+      "name": "nn_64",
+      "config_id": "dbd55b7b",
+      "max_params_k10": 22504,
+      "lr": 0.0006,
+      "weight_decay": 0.01,
+      "dropout": 0.1,
+      "patience": 50,
+      "batch_size": 128,
+      "optimizer": "adamw",
+      "n_epochs": 1000,
+      "hidden_dims": [
+        64
+      ],
+      "activation": "ReLU"
     }
-  ],
-  "chosen_from": {
-    "top_values_rows": [
-      0,
-      8
-    ],
-    "saved": "2026-10-06T09:24:45"
-  }
+  ]
 }
