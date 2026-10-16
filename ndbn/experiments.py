@@ -871,7 +871,8 @@ def get_configs(top_values, names):
     merged into a row (its run_names), since a row's run_name label can change
     when the tables change. The returned rows are labelled with the requested
     names (run_name), so arm names stay the same and run_configs still skips
-    configs already run; a config_id (any of a row's config_ids) is labelled
+    configs already run; a config_id (the one shown in the tables, or any of a
+    row's config_ids: the exact configs merged into it) is labelled
     with the name of that config's best trial. Raises KeyError if a name matches no row (e.g. the
     config is no longer in any table) or more than one. Names that select a
     row already selected (e.g. two config_ids that become the same config
@@ -888,7 +889,9 @@ def get_configs(top_values, names):
         if len(m) == 0:
             m = top_values.index[merged.map(lambda ns: n in ns).astype(bool)]
         by_id = len(m) == 0
-        if by_id:
+        if by_id and "config_id" in top_values:     # the id shown in the tables
+            m = top_values.index[top_values["config_id"] == n]
+        if by_id and len(m) == 0:
             m = top_values.index[ids.map(lambda cs: n in cs).astype(bool)]
         if len(m) != 1:
             raise KeyError(f"{n!r} matches {len(m)} rows of top_values; run_names: "
