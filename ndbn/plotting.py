@@ -18,6 +18,23 @@ DEFAULT_N_NODES      = 20
 DEFAULT_IN_DEGREE    = 4
 DEFAULT_ESTIMATOR    ="mle"
 DEFAULT_CARD         = 2
+# estimators plotted (e.g. as hue="estimator"): None = every one in df, a list of names, or
+# the path of a chosen_nn json (save_chosen_configs): its configs plus BASELINE_ESTIMATORS
+DEFAULT_ESTIMATORS   = None
+BASELINE_ESTIMATORS  = ("mle", "nn_linear")
+
+
+def _estimator_names(estimators):
+    """Estimator names to plot, in order: None (all), a list of names, or the
+    path of a chosen_nn json -> BASELINE_ESTIMATORS + its configs' names."""
+    if estimators is None:
+        return None
+    if isinstance(estimators, str):
+        import json
+        with open(estimators) as f:
+            chosen = [c["name"] for c in json.load(f)["configs"]]
+        return list(dict.fromkeys([*BASELINE_ESTIMATORS, *chosen]))
+    return list(estimators)
 
 # ── Palette ──────────────────────────────────────────────────────────────────
 
@@ -75,19 +92,33 @@ def plot_grouped_curves(
     df, x, hue, y="kl",
     # fixed-variable overrides (None → use DEFAULT_*)
     alpha=None, sample_size=None,
-    n_nodes=None, in_degree=None, estimator=None, card=None,
+    n_nodes=None, in_degree=None, estimator=None, card=None, estimators=None,
     # plot styling
     logy=False, err=None, min_obs=3,
     xlabel=None, ylabel=None, title=None, hue_label=None,
     out_path=None, ax=None, figsize=(7, 5),
 ):
-    """Mean y vs x, one curve per hue value, all other variables held fixed."""
+    """Mean y vs x, one curve per hue value, all other variables held fixed.
+
+    estimators : which estimators to plot (None -> DEFAULT_ESTIMATORS): a list
+                 of names, or the path of a chosen_nn json (its configs plus
+                 BASELINE_ESTIMATORS); with hue="estimator" the curves follow
+                 that order. Names not in df are reported.
+    """
     if alpha is None:        alpha = DEFAULT_ALPHA
     if sample_size is None:  sample_size = DEFAULT_SAMPLE_SIZE
     if n_nodes is None:      n_nodes = DEFAULT_N_NODES
     if in_degree is None:    in_degree = DEFAULT_IN_DEGREE
     if estimator is None:    estimator = DEFAULT_ESTIMATOR
     if card is None:         card = DEFAULT_CARD
+    if estimators is None:   estimators = DEFAULT_ESTIMATORS
+
+    names = _estimator_names(estimators)
+    if names is not None and "estimator" in df.columns:
+        missing = [e for e in names if e not in set(df["estimator"])]
+        if missing:
+            print(f"WARNING: estimators not in the results: {missing}")
+        df = df[df["estimator"].isin(names)]
 
     sub = _filter(df, x, hue,
                   alpha=alpha, sample_size=sample_size,
@@ -116,6 +147,8 @@ def plot_grouped_curves(
         fig, ax = plt.subplots(figsize=figsize)
 
     hue_vals = sorted(sub[hue].dropna().unique())
+    if hue == "estimator" and names is not None:     # the chosen order (baselines, then best first)
+        hue_vals = [e for e in names if e in set(hue_vals)]
     colors = _colors(len(hue_vals))
 
     for hv, c in zip(hue_vals, colors):
@@ -336,15 +369,17 @@ def _value_range(top, c, min_frac=0.2):
     return ", ".join(f"{fmt(v)} ({counts[str(v)]})" for v in common)
 
 
-def _group_trials(s, cols):
+def _group_trials(s, cols, m="mean_kl"):
     """Average trials (rows of s, indexed by run_id) whose settings `cols` are
     identical (after summarise_trials' rounding / snapping / fixed values):
     one row per distinct config. mean_kl / mean_val_loss / extras and kl_se
-    are means over every run in the group; n_trials counts its distinct
+    are means over every run in the group, and so is the per-DAG val loss
+    (_val_by_dag, a Series indexed by dag_idx, if s has it); n_trials counts its distinct
     configs (config_ids: exact settings before tidying), so an exact re-run of
     a config (e.g. a candidate run) adds to the means but not to n_trials.
-    config_id / run_name / run_id are the group's best trial, run_names / config_ids list
-    every trial / config in it. kl_se is the mean of the trials' kl_se, not sqrt(sum se^2)/n:
+    config_id is the id of the group's shared (tidied) settings, so the same
+    group has the same id in every table; run_name / run_id are its best trial
+    (lowest `m`), run_names / config_ids list every trial / exact config in it. kl_se is the mean of the trials' kl_se, not sqrt(sum se^2)/n:
     every trial is evaluated on the same DAGs and test rows, so their errors
     are strongly correlated and averaging removes far less noise than
     independent errors would (the true SE of the average lies between
@@ -353,19 +388,23 @@ def _group_trials(s, cols):
     s = s.reset_index()
     rows = []
     for _, g in s.groupby(cols, dropna=False, sort=False):
-        best = g.loc[g["mean_kl"].idxmin()]
-        row = {"config_id": best["config_id"],      # the best trial's config
+        best = g.loc[g[m].idxmin()]
+        # id of the tidied settings the group shares: the same group gets the same id
+        # in every table (and it's the config_id the group runs as when chosen)
+        row = {"config_id": config_id({c: best[c] for c in cols}),
                "run_id": best["run_id"], "run_name": best["run_name"],
-               "run_names": tuple(g.sort_values("mean_kl")["run_name"]),   # every trial merged
-               "config_ids": tuple(dict.fromkeys(g.sort_values("mean_kl")["config_id"])),
+               "run_names": tuple(g.sort_values(m)["run_name"]),   # every trial merged
+               "config_ids": tuple(dict.fromkeys(g.sort_values(m)["config_id"])),
                # name of each config's best trial, for labelling a config picked by id
-               "id_names": dict(g.sort_values("mean_kl", ascending=False)
+               "id_names": dict(g.sort_values(m, ascending=False)
                                 [["config_id", "run_name"]].to_numpy()),
                "mean_kl": g["mean_kl"].mean(),
                "kl_se": g["kl_se"].mean(),     # errors are correlated; see docstring
                "mean_val_loss": g["mean_val_loss"].mean(),
                "n_dags": best["n_dags"], "n_trials": g["config_id"].nunique(),
                **{c: best[c] for c in cols}}
+        if "_val_by_dag" in g:
+            row["_val_by_dag"] = pd.concat(list(g["_val_by_dag"]), axis=1).mean(axis=1)
         for c in ["stored_params", "best_epoch_mean", "fit_time_s"]:
             if c in g:
                 row[c] = g[c].mean()
@@ -375,19 +414,40 @@ def _group_trials(s, cols):
     return pd.DataFrame(rows).set_index("run_id")
 
 
+def _paired_gap(vals, best):
+    """Paired comparison of configs evaluated on the same DAGs (and validation
+    rows) against the best one: vals is a DataFrame (configs x dag_idx) of
+    per-DAG losses, best its row label. Returns (gap, se): each config's mean
+    per-DAG difference from the best, and the standard error of that mean,
+    sd(differences, ddof=1) / sqrt(n_dags), i.e. a paired t-test. Pairing
+    removes what all configs share on a DAG (its entropy, which makes the raw
+    spread of the loss across DAGs far larger than any gap between configs);
+    the DAGs are independent networks, so their differences are independent.
+    DAGs missing for a config are left out of its comparison."""
+    diff = vals.sub(vals.loc[best], axis=1)
+    n = diff.notna().sum(axis=1)
+    return diff.mean(axis=1), (diff.std(axis=1, ddof=1) / np.sqrt(n)).fillna(0.0)
+
+
 def summarise_trials(trials, n_se=1.0, fixed=None, snap=(), rel_tol=0.0, max_params=None,
                      metric="kl", show=True, **filters):
     """Per (in_degree, sample_size): the trials within n_se kl_se (or rel_tol) of the best.
 
     metric  : "kl" (default) selects on mean_kl as described below.
-              "val_loss" selects on mean_val_loss instead, with the same window
-              in nats (n_se * kl_se or rel_tol * KL of the best-KL config):
-              val loss = entropy (the same for every config: same data) + KL,
-              so differences in the two estimate the same thing. Use it to see
-              which configs choosing on val loss would pick, next to the KL
-              tables. The printed tables then bold mean_kl where it is within
-              the KL threshold (and the KL tables bold mean_val_loss the same
-              way).
+              "val_loss" selects on mean_val_loss (validation only, no test
+              data) instead: the best is the lowest mean_val_loss, and a config
+              is kept if its mean per-DAG excess over the best, val_gap, is
+              within n_se of its paired standard error over the DAGs, val_se
+              (see _paired_gap): every config is fitted and validated on the
+              same DAGs and rows, so each DAG's own entropy cancels in the
+              difference. (The raw spread of the val loss across DAGs is
+              dominated by that entropy and would keep nearly every config.)
+              rel_tol is not used for the val loss: a percentage of it
+              (entropy + KL) means nothing. The tables get val_gap and val_se
+              columns, and bold mean_kl where it is within the KL threshold
+              below (n_se kl_se or rel_tol, whichever is looser), for
+              reference (the KL tables bold mean_val_loss within the same
+              window in nats).
 
     trials  : the per-cell trial CSV(s) (one row per trial x dag x sample size).
     filters : any column = value, e.g. card=2, alpha=0.5, sweep_id="abc123".
@@ -405,12 +465,10 @@ def summarise_trials(trials, n_se=1.0, fixed=None, snap=(), rel_tol=0.0, max_par
               nodes, mean over the tuning DAGs) at that in-degree from every
               table (as in candidate_table). A config's total at k=10 is looked
               up by its hidden_dims (and card) from the trials run at k=10;
-              configs whose architecture never ran there are dropped. The best
-              (and so the threshold) is still taken over ALL configs, so a table
-              only keeps configs under the cap that are as good as the best
-              found (as in the one-standard-error rule); a table where none is
-              is left out, with a message saying how far the best one under
-              the cap is from the best.
+              configs whose architecture never ran there are dropped. The cap
+              is applied first: the best (and so the threshold) is the best
+              config under the cap, and the overall best is printed for
+              reference. A table with no config under the cap is left out.
     Settings are tidied before trials are compared: lr / weight_decay are
     rounded to 1 significant figure, unless listed in
     snap    : (column, mantissas) pairs, e.g. (("lr", (1, 3)),) puts lr on
@@ -425,9 +483,13 @@ def summarise_trials(trials, n_se=1.0, fixed=None, snap=(), rel_tol=0.0, max_par
     run_name is its best trial. The threshold is applied to these rows.
     Prints one table per pair when show=True (the other metric in bold where
     it is within the same window of its own best). Returns (tables, top_values):
-    tables     : {(in_degree, sample_size): DataFrame}, sorted by n_trials
-                 (most first), then the metric. Printed tables are indexed by
-                 config_id (the best trial's), round lr / weight_decay to 1
+    tables     : {(in_degree, sample_size): DataFrame}, sorted by mean_val_loss
+                 (lowest first) with metric="val_loss", else by n_trials (most
+                 first), then mean_kl, with the selection metric's columns
+                 first (mean_val_loss, val_gap, val_se, or mean_kl,
+                 kl_se). Printed tables are indexed by
+                 config_id (of the tidied settings: the same config has
+                 the same id in every table), round lr / weight_decay to 1
                  significant figure and hide run_id, run_name, sweep_id, n_dags, fixed
                  settings and settings that are constant across all trials;
                  the returned tables keep every column. Use
@@ -471,6 +533,10 @@ def summarise_trials(trials, n_se=1.0, fixed=None, snap=(), rel_tol=0.0, max_par
         print("configs with " + " or ".join(f"{cap:,} or more total parameters at in-degree {k}"
                                              for k, cap in (max_params or {}).items())
               + " are removed from every table")
+    if show and metric == "val_loss" and rel_tol:
+        print(f"configs are kept within {n_se:g} paired SE of the best val loss (rel_tol is not "
+              f"used for it: a % of entropy + KL means nothing); mean_kl is bold within "
+              f"{n_se:g} kl_se or {rel_tol:.0%} of the best KL")
     tables = {}
     for (k, n), g in t.groupby(["in_degree", "sample_size"]):
         s = g.groupby("run_id").agg(
@@ -486,6 +552,9 @@ def summarise_trials(trials, n_se=1.0, fixed=None, snap=(), rel_tol=0.0, max_par
         s = s[s["n_dags"] == s["n_dags"].max()]
         if s.empty:
             continue
+        # per-DAG val loss of each run, for the paired comparison (metric="val_loss")
+        vbd = g.pivot_table(index="run_id", columns="dag_idx", values="val_loss", aggfunc="mean")
+        s["_val_by_dag"] = [vbd.loc[rid] for rid in s.index]
         # runs under the size cap; the others still set the best (and so the threshold)
         under = set(s.index)
         if caps:
@@ -502,31 +571,44 @@ def summarise_trials(trials, n_se=1.0, fixed=None, snap=(), rel_tol=0.0, max_par
                 s[c] = s[c].map(lambda x, m=grids[c]: _snap(x, m))
             elif c in _ROUNDED:
                 s[c] = s[c].map(_round_sig)
-        s = _group_trials(s, hp)       # a grouped row's runs share hidden_dims, so its
+        s = _group_trials(s, hp, m)    # a grouped row's runs share hidden_dims, so its
                                        # best run tells whether it is under the cap
-        # window in nats, from the best-KL config over ALL configs (also those over the
-        # cap): n_se of its kl_se or rel_tol of its KL, whichever is looser; used for KL and
-        # for val loss alike (val loss = entropy, the same for all configs, + KL)
+        s = s.sort_values(m)
+        best_all = s.iloc[0]           # best on the metric over ALL configs, for reference
+        s = s[s.index.isin(under)].copy()
+        name = "KL" if metric == "kl" else "val loss"
+        if s.empty:
+            if show:
+                print(f"in-degree {k}, N = {n}: no config is under the size cap "
+                      f"(best {name} over all configs {best_all[m]:.4f})")
+            continue
+        # the thresholds are relative to the best configs under the size cap.
+        # KL window in nats, from the best-KL config: n_se of its kl_se or rel_tol of its
+        # KL, whichever is looser; selects for KL, and bolds val loss in the KL tables
+        # (val loss = entropy, the same for all configs, + KL)
         best_kl = s.loc[s["mean_kl"].idxmin()]
         window = max(n_se * best_kl["kl_se"], rel_tol * best_kl["mean_kl"])
         limits = {c: s[c].min() + window for c in ("mean_kl", "mean_val_loss")}
-        s = s.sort_values(m)
-        best = s.iloc[0]               # best on the metric, over ALL configs
-        s_under = s[s.index.isin(under)]
-        top = (s_under[s_under[m] <= limits[m]].reset_index()
-               .sort_values(["n_trials", m], ascending=[False, True], kind="stable")
+        best = s.iloc[0]               # best on the metric under the cap
+        if metric == "val_loss":
+            # paired over the DAGs against the best config
+            vals = pd.DataFrame(list(s["_val_by_dag"]), index=s.index)
+            s["val_gap"], s["val_se"] = _paired_gap(vals, s.index[0])
+            keep = s["val_gap"] <= n_se * s["val_se"]
+        else:
+            keep = s[m] <= limits[m]
+        s = s.drop(columns="_val_by_dag")
+        # val loss: lowest first; KL: most-merged configs first, then KL
+        by, asc = ([m], [True]) if metric == "val_loss" else (["n_trials", m], [False, True])
+        top = (s[keep].reset_index()
+               .sort_values(by, ascending=asc, kind="stable")
                .reset_index(drop=True))
-        name = "KL" if metric == "kl" else "val loss"
+        # the selection metric's columns first
+        lead = [m, "val_gap", "val_se"] if metric == "val_loss" else [m, "kl_se"]
+        top = top[[c for c in lead if c in top] + [c for c in top if c not in lead]]
         head = (f"in-degree {k}, N = {n}: best {name} {best[m]:.4f}"
-                + (f" ± {best['kl_se']:.4f}" if metric == "kl" else f" (window {window:.4f} nats)"))
-        if top.empty:
-            if show:
-                worse = (f"{s_under[m].iloc[0] / best[m] - 1:.1%}" if metric == "kl" else
-                         f"{s_under[m].iloc[0] - best[m]:.4f} nats")  # val loss: % is meaningless
-                gap = ("no config is under the cap" if s_under.empty else
-                       f"the best one under the cap ({s_under[m].iloc[0]:.4f}) is {worse} worse")
-                print(f"{head} -> no config under the size cap is within tolerance; {gap}")
-            continue
+                + (f" ± {best['kl_se']:.4f}" if metric == "kl"
+                   else f" (paired over {int(best['n_dags'])} DAGs)"))
         top.attrs["hidden"] = hidden        # for shared_settings_table
         top.attrs["n_se"] = n_se            # threshold, reported downstream
         top.attrs["rel_tol"] = rel_tol
@@ -537,8 +619,9 @@ def summarise_trials(trials, n_se=1.0, fixed=None, snap=(), rel_tol=0.0, max_par
             grouped = "".join(f" ({c} fixed at {v:g})" for c, v in fixed.items())
             grouped += "".join(f" ({c} snapped to {'-'.join(map(str, g_))} grid)"
                                for c, g_ in snap)
-            print(head + (" (over all configs, also those over the size cap)" if caps else "")
-                  + f" -> {len(top)} of {len(s_under)} configs{grouped} {_threshold(tables)}")
+            print(head + (f" under the size cap (best over all configs {best_all[m]:.4f})"
+                          if caps else "")
+                  + f" -> {len(top)} of {len(s)} configs{grouped} {_threshold(tables)}")
             # config_id first, no run_name, sweep_id or row number
             disp = _for_display(top.drop(columns=[c for c in [*hidden, "run_name", "sweep_id"]
                                                   if c in top])
@@ -565,11 +648,12 @@ def _threshold(tables):
     """'within N kl_se' (or rel_tol, params filter) for the tables' threshold
     (as set in summarise_trials)."""
     a = next(iter(tables.values())).attrs if tables else {}
-    text = f"within {a.get('n_se', 1.0):g} kl_se"
-    if a.get("rel_tol"):
-        text += f" or {a['rel_tol']:.0%}"
     if a.get("metric") == "val_loss":
-        text += " (as nats) of the best val loss"
+        text = f"within {a.get('n_se', 1.0):g} paired SE (over DAGs) of the best val loss"
+    else:
+        text = f"within {a.get('n_se', 1.0):g} kl_se"
+        if a.get("rel_tol"):
+            text += f" or {a['rel_tol']:.0%}"
     if a.get("max_params"):
         text += ", total params " + ", ".join(f"k{k} < {v:,}" for k, v in a["max_params"].items())
     return text
@@ -606,19 +690,21 @@ def shared_settings_table(tables, min_frac=0.2, show=True):
     return out
 
 
-def common_configs(tables, match_on=("hidden_dims", "dropout", "patience", "batch_size"),
+def common_configs(tables, match_on=("hidden_dims", "lr", "patience", "batch_size"),
                    round_cols=("lr", "weight_decay"), min_tables=2, show=True):
-    """Configs in the top (within n_se kl_se, as set in summarise_trials) of
+    """Configs in the top (the threshold set in summarise_trials) of
     more than one summarise_trials table.
 
     tables     : the dict returned by summarise_trials.
-    match_on   : setting columns that define "the same config". Continuous
-                 sampled values never repeat exactly, so the default uses the
-                 discrete settings; add e.g. "lr" to also match on it.
+    match_on   : setting columns that define "the same config": the discrete
+                 settings and lr (already snapped / rounded by summarise_trials,
+                 so it takes a few values); drop "lr" to match across learning rates.
     round_cols : columns rounded to 1 significant figure before matching, if
                  they are in match_on (3.2e-4 and 2.8e-4 both become 3e-4).
     Returns one row per config in >= min_tables tables: its settings,
-    n_tables, top_in (which in-degree / sample size tables) and n_trials.
+    n_tables, top_in (which in-degree / sample size tables), n_trials and
+    config_ids (the config_id each matched table row is indexed by, as in
+    the summarise_trials tables; for experiments.get_configs).
     Mean KL is not compared across tables: its scale differs with k and N.
     """
     match_on = list(match_on)
@@ -626,14 +712,16 @@ def common_configs(tables, match_on=("hidden_dims", "dropout", "patience", "batc
     for (k, n), top in tables.items():
         for _, r in top.iterrows():
             key = {c: (_round_sig(r[c]) if c in round_cols else r[c]) for c in match_on}
-            rows.append({**key, "table": f"k{k} N{n}", "run_id": r["run_id"]})
+            rows.append({**key, "table": f"k{k} N{n}", "run_id": r["run_id"],
+                         "config_id": r["config_id"]})
     if not rows:
-        return pd.DataFrame(columns=[*match_on, "n_tables", "top_in", "n_trials"])
+        return pd.DataFrame(columns=[*match_on, "n_tables", "top_in", "n_trials", "config_ids"])
     df = pd.DataFrame(rows)
     out = (df.groupby(match_on, dropna=False)
            .agg(n_tables=("table", "nunique"),
                 top_in=("table", lambda x: ", ".join(dict.fromkeys(x))),
-                n_trials=("run_id", "nunique"))
+                n_trials=("run_id", "nunique"),
+                config_ids=("config_id", lambda x: ", ".join(dict.fromkeys(x))))
            .reset_index())
     out = (out[out["n_tables"] >= min_tables]
            .sort_values(["n_tables", "n_trials"], ascending=False).reset_index(drop=True))
@@ -648,8 +736,9 @@ def _merge_top_configs(tables):
     """Every config in the summarise_trials tables once, with its settings
     (already rounded / snapped / fixed there), as summarise_trials' top_values.
 
-    Columns: run_name / run_id of the merged row's best trial (lowest
-    mean_kl relative to its table's best; used to name the arm), in_tables
+    Columns: config_id (of the tidied settings, as in the tables),
+    run_name / run_id of the merged row's best trial (lowest
+    selection metric relative to its table's best; used to name the arm), in_tables
     (every in-degree / sample size table it is top in), n_tables, n_trials
     (distinct configs merged into the row, over all its tables: exact re-runs
     count once), then every setting, then run_names / config_ids (every
@@ -662,12 +751,16 @@ def _merge_top_configs(tables):
     rows = {}
     for (k, n), top in tables.items():
         cols = [c for c in _HPARAM_COLS if c in top]
-        best_kl = top["mean_kl"].min()
+        val = top.attrs.get("metric") == "val_loss"
+        m = "mean_val_loss" if val else "mean_kl"
+        best_m = top[m].min()
         for _, r in top.iterrows():
             settings = {c: r[c] for c in cols}
             key = tuple(str(v) for v in settings.values())
-            regret = r["mean_kl"] / best_kl - 1
-            entry = rows.setdefault(key, {"run_id": r["run_id"], "run_name": r["run_name"],
+            # val loss: excess in nats (a ratio of entropy + KL means nothing)
+            regret = r[m] - best_m if val else r[m] / best_m - 1
+            entry = rows.setdefault(key, {"config_id": r["config_id"],   # tidied settings' id
+                                          "run_id": r["run_id"], "run_name": r["run_name"],
                                           "_regret": regret, "tables": [],
                                           **settings, "run_names": {}, "config_ids": {},
                                           "id_names": {}})
@@ -692,7 +785,7 @@ def _merge_top_configs(tables):
 
 
 def candidate_table(trials, source="candidates", n_se=2.0, rel_tol=0.0, max_params=None,
-                    show=True):
+                    metric="kl", show=True):
     """Compare chosen configs run on every (in-degree, sample size).
 
     trials : the tuning data (load_trials(RESULTS_DIR)); the rows with
@@ -705,31 +798,39 @@ def candidate_table(trials, source="candidates", n_se=2.0, rel_tol=0.0, max_para
     max_params : {in-degree: limit}, e.g. {10: 100_000}: keep only configs with
              fewer total stored params (mean over the tuning DAGs) than the
              limit at that in-degree ("params k10" < 100000); configs with no
-             params recorded there are dropped.
+             params recorded there are dropped. The cap is applied first, so
+             the thresholds below are from the best candidate under it.
+    metric : what the configs are compared on, "kl" (default) or "val_loss".
     One column per (k, N) ("k6 N600"): the config's mean KL over the tuning
     DAGs. In the printed table, a value is bold if it is close to the best
-    candidate for that (k, N) (over all candidates, also any max_params
-    removes, so the size cap never moves the bar): within n_se of
+    candidate for that (k, N) (under the size cap, if any): within n_se of
     the best's kl_se (statistically indistinguishable; kl_se = sqrt(sum of the
     DAGs' kl_se^2)/n, the DAGs have separate test sets) or within rel_tol of
     the best's KL (KL <= best * (1 + rel_tol): practically negligible, e.g.
-    rel_tol=0.02 for 2%), whichever is looser. Then one column per (k, N) of
-    mean validation loss ("val k6 N600"), bold if within the same window in nats
-    of the best val loss: val loss = entropy + KL with the entropy shared by all
-    configs (same data), so differences estimate the same thing. Compare the
-    two bold patterns to see whether choosing on val loss would give the same
-    choice. Rows are sorted by average KL rank over the (k, N) columns (rank 1
-    = lowest KL in a column; columns a config has no runs in are skipped), best
-    first. Also listed per config: hidden_dims, lr, dropout,
+    rel_tol=0.02 for 2%), whichever is looser. And one column per (k, N) of
+    mean validation loss ("val k6 N600"). With metric="kl", a val loss is bold
+    if within the same window in nats of the best val loss (val loss = entropy
+    + KL with the entropy shared by all configs, so differences estimate the
+    same thing). With metric="val_loss", it is bold if its mean per-DAG excess
+    over the best candidate's val loss is within n_se of its paired standard
+    error over the DAGs (see _paired_gap; rel_tol is not used for it), the val
+    columns come first and the KL columns stay as reference. Rows are sorted
+    by average rank on the metric over the (k, N) columns (rank 1 = lowest in
+    a column; columns a config has no runs in are skipped), best first. Also
+    listed per config: hidden_dims, lr, dropout,
     patience, batch_size, fit_time_s (mean seconds per fit) and stored_params
     per in-degree ("params k6", mean over the tuning DAGs), since the input
     layer grows with the number of parents. Returns the table.
     """
+    if metric not in ("kl", "val_loss"):
+        raise ValueError(f"metric must be 'kl' or 'val_loss', not {metric!r}")
     if "source" not in trials:
         return pd.DataFrame()
     r = trials[trials["source"] == source].copy()
     if r.empty:
         return pd.DataFrame()
+    if metric == "val_loss" and "val_loss" not in r:
+        raise KeyError("no val_loss recorded for the candidate runs")
     r["_key"] = add_config_ids(r)["config_id"]          # identical settings = one config
     r = r.drop_duplicates(["_key", "in_degree", "sample_size", "dag_idx"], keep="last")
     cols = ["in_degree", "sample_size"]
@@ -739,46 +840,67 @@ def candidate_table(trials, source="candidates", n_se=2.0, rel_tol=0.0, max_para
     params = (r.pivot_table(index="_key", columns="in_degree", values="stored_params",
                             aggfunc="mean")       # depends on in-degree (input size)
               if "stored_params" in r else pd.DataFrame(index=kl.index))
-    # threshold per (k, N), from the best of ALL candidates (also those over the size
-    # cap): within n_se of its kl_se, or within rel_tol of its KL, whichever is looser
-    limit, best_kl = {}, {}
-    for c in kl.columns:
-        best = kl[c].idxmin()
-        best_kl[c] = kl.at[best, c]
-        limit[c] = max(kl.at[best, c] + n_se * se.at[best, c], kl.at[best, c] * (1 + rel_tol))
-    # validation loss = entropy (the same for every config: same data) + KL, so a
-    # difference in val loss estimates the same as one in KL: give it the KL window in
-    # nats, from its own best (over all candidates too)
     vl = (r.pivot_table(index="_key", columns=cols, values="val_loss", aggfunc="mean")
           if "val_loss" in r else None)
-    val_limit = ({c: vl[c].min() + (limit[c] - best_kl[c]) for c in kl.columns}
-                 if vl is not None else {})
-    if max_params:      # then drop the configs over the cap
+    best_val = vl.min() if vl is not None else None    # over all candidates, for reference
+    best_kl_all = kl.min()
+    if max_params:      # drop the configs over the cap first: the thresholds are from the best under it
         keep = pd.Series(True, index=kl.index)
         for k, cap in max_params.items():
             if k not in params:
                 raise KeyError(f"no stored_params recorded for in-degree {k}")
             keep &= (params[k].reindex(kl.index) < cap).fillna(False)
-        kl, se = kl[keep], se.reindex(kl.index)[keep]
+        kl, se = kl[keep], se[keep]
+        if vl is not None:
+            vl = vl.reindex(kl.index)
+        r = r[r["_key"].isin(kl.index)]
+        kl = kl.dropna(axis=1, how="all")       # (k, N) cells no capped config ran
         if kl.empty:
             print(f"no candidates with max_params={max_params}")
             return pd.DataFrame()
+    # threshold per (k, N), from the best candidate (under the size cap): within n_se
+    # of its kl_se, or within rel_tol of its KL, whichever is looser
+    limit, best_kl = {}, {}
+    for c in kl.columns:
+        best = kl[c].idxmin()
+        best_kl[c] = kl.at[best, c]
+        limit[c] = max(kl.at[best, c] + n_se * se.at[best, c], kl.at[best, c] * (1 + rel_tol))
+    if vl is None:
+        val_ok = None
+    elif metric == "val_loss":
+        # paired over the DAGs against the best candidate (under the size cap): within
+        # n_se of the paired SE of the per-DAG differences
+        val_ok = pd.DataFrame(index=vl.index)
+        for c in vl.columns:
+            v = r[(r["in_degree"] == c[0]) & (r["sample_size"] == c[1])].pivot_table(
+                index="_key", columns="dag_idx", values="val_loss", aggfunc="mean")
+            gap, gse = _paired_gap(v, v.mean(axis=1).idxmin())
+            val_ok[c] = (gap <= n_se * gse).reindex(vl.index).fillna(False)
+    else:
+        # validation loss = entropy (the same for every config: same data) + KL, so a
+        # difference in val loss estimates the same as one in KL: give it the KL window in
+        # nats, from its own best (under the size cap too)
+        val_ok = pd.DataFrame({c: vl[c] <= vl[c].min() + (limit[c] - best_kl[c])
+                               for c in kl.columns})
     near = pd.DataFrame({c: kl[c] <= limit[c] for c in kl.columns})
 
-    order = kl.rank().mean(axis=1).sort_values(kind="stable").index   # average KL rank, best first
+    # average rank on the metric, best first
+    order = (vl if metric == "val_loss" else kl).rank().mean(axis=1).sort_values(kind="stable").index
 
     label = lambda kn: f"k{kn[0]} N{kn[1]}"
-    out = kl.loc[order].set_axis([label(c) for c in kl.columns], axis=1)
-    kl_cols = list(out.columns)
+    kl_cols = [label(c) for c in kl.columns]
     near = near.loc[order].set_axis(kl_cols, axis=1)
-    # mean validation loss per (k, N) (the validation-only view; scale differs with k and N),
-    # bold within the KL window carried over in nats (see val_limit)
+    kl_out = kl.loc[order].set_axis(kl_cols, axis=1)
+    # mean validation loss per (k, N) (the validation-only view; scale differs with k and N)
     val_cols, near_val = [], pd.DataFrame(index=order)
+    val_out = pd.DataFrame(index=order)
     if vl is not None:
         for c in kl.columns:
-            out[f"val {label(c)}"] = vl[c]
-            near_val[f"val {label(c)}"] = vl[c].reindex(order) <= val_limit[c]
+            val_out[f"val {label(c)}"] = vl[c].reindex(order)
+            near_val[f"val {label(c)}"] = val_ok[c].reindex(order).astype(bool)
         val_cols = list(near_val.columns)
+    # the metric's columns first
+    out = pd.concat([val_out, kl_out] if metric == "val_loss" else [kl_out, val_out], axis=1)
     # settings and cost, per config
     by = r.groupby("_key")
     for c in ("hidden_dims", "lr", "dropout", "patience", "batch_size"):
@@ -791,17 +913,30 @@ def candidate_table(trials, source="candidates", n_se=2.0, rel_tol=0.0, max_para
     out.index.name = "config_id"
     near.index = near_val.index = out.index
     if show:
-        print(f"chosen configs on every (in-degree, sample size): mean KL over the tuning DAGs; "
-              f"bold = within {n_se:g} SE or {rel_tol:.0%} of the best candidate "
-              f"for that in-degree and sample size; then mean validation loss (val k N), "
-              f"bold = within the same window (in nats) of the best val loss"
-              + (f" (only configs with total params {max_params} shown; the best is over "
-                 f"all candidates)" if max_params else ""))
-        for c in kl.columns:
-            if max_params and not (kl[c] <= limit[c]).any():   # near is relabelled by now
-                print(f"k{c[0]} N{c[1]}: no candidate under the size cap is within tolerance; the "
-                      f"best one under it ({kl[c].min():.4f}) is {kl[c].min() / best_kl[c] - 1:.1%} "
-                      f"worse than the best ({best_kl[c]:.4f})")
+        kl_text = (f"mean KL over the tuning DAGs (k N), bold = within {n_se:g} SE or "
+                   f"{rel_tol:.0%} of the best candidate")
+        cap_text = (f" (only configs with total params {max_params} shown; the best is the "
+                    f"best of those)" if max_params else "")
+        if metric == "val_loss":
+            print(f"chosen configs on every (in-degree, sample size): mean validation loss over "
+                  f"the tuning DAGs (val k N), bold = within {n_se:g} paired SE (over the DAGs) of "
+                  f"the best candidate for that in-degree and sample size; then, for reference, "
+                  f"{kl_text}{cap_text}")
+        else:
+            print(f"chosen configs on every (in-degree, sample size): {kl_text} "
+                  f"for that in-degree and sample size; then mean validation loss (val k N), "
+                  f"bold = within the same window (in nats) of the best val loss{cap_text}")
+        for c, kc in zip(kl.columns, kl_cols) if max_params else ():
+            # for reference: how much the size cap costs against the best of all candidates
+            if metric == "val_loss":
+                if vl[c].min() > best_val[c]:
+                    print(f"{kc}: the best candidate under the size cap ({vl[c].min():.4f}) is "
+                          f"{vl[c].min() - best_val[c]:.4f} nats worse than the best of all "
+                          f"candidates ({best_val[c]:.4f})")
+            elif kl[c].min() > best_kl_all[c]:
+                print(f"{kc}: the best candidate under the size cap ({kl[c].min():.4f}) is "
+                      f"{kl[c].min() / best_kl_all[c] - 1:.1%} worse than the best of all "
+                      f"candidates ({best_kl_all[c]:.4f})")
         try:
             fmt = {c: "{:.4f}" for c in kl_cols + val_cols}
             fmt.update({c: "{:.0f}" for c in out.columns if c.startswith("params")
