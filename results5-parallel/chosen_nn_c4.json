@@ -1,0 +1,87 @@
+{
+  "configs": [
+    {
+      "name": "nn_256",
+      "config_id": "f0c5e5f0",
+      "max_params_k10": 174416,
+      "lr": 0.0006,
+      "weight_decay": 0.0,
+      "dropout": 0.0,
+      "patience": 10,
+      "batch_size": 32,
+      "optimizer": "adamw",
+      "n_epochs": 1000,
+      "hidden_dims": [
+        256
+      ],
+      "activation": "ReLU"
+    },
+    {
+      "name": "nn_128_64",
+      "config_id": "ae643bf1",
+      "max_params_k10": 247248,
+      "lr": 0.0006,
+      "weight_decay": 0.0,
+      "dropout": 0.3,
+      "patience": 50,
+      "batch_size": 32,
+      "optimizer": "adamw",
+      "n_epochs": 1000,
+      "hidden_dims": [
+        128,
+        64
+      ],
+      "activation": "ReLU"
+    },
+    {
+      "name": "nn_64_32",
+      "config_id": "c6d024ed",
+      "max_params_k10": 82704,
+      "lr": 0.0006,
+      "weight_decay": 0.0,
+      "dropout": 0.3,
+      "patience": 50,
+      "batch_size": 32,
+      "optimizer": "adamw",
+      "n_epochs": 1000,
+      "hidden_dims": [
+        64,
+        32
+      ],
+      "activation": "ReLU"
+    },
+    {
+      "name": "nn_32_16",
+      "config_id": "fc0b2513",
+      "max_params_k10": 31152,
+      "lr": 0.001,
+      "weight_decay": 0.0,
+      "dropout": 0.3,
+      "patience": 50,
+      "batch_size": 32,
+      "optimizer": "adamw",
+      "n_epochs": 1000,
+      "hidden_dims": [
+        32,
+        16
+      ],
+      "activation": "ReLU"
+    },
+    {
+      "name": "nn_32",
+      "config_id": "48990a9c",
+      "max_params_k10": 21872,
+      "lr": 0.0006,
+      "weight_decay": 0.0,
+      "dropout": 0.3,
+      "patience": 50,
+      "batch_size": 64,
+      "optimizer": "adamw",
+      "n_epochs": 1000,
+      "hidden_dims": [
+        32
+      ],
+      "activation": "ReLU"
+    }
+  ]
+}

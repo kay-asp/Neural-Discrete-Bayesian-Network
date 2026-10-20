@@ -377,9 +377,8 @@ def _group_trials(s, cols, m="mean_kl"):
     (_val_by_dag, a Series indexed by dag_idx, if s has it); n_trials counts its distinct
     configs (config_ids: exact settings before tidying), so an exact re-run of
     a config (e.g. a candidate run) adds to the means but not to n_trials.
-    config_id is the id of the group's shared (tidied) settings, so the same
-    group has the same id in every table; run_name / run_id are its best trial
-    (lowest `m`), run_names / config_ids list every trial / exact config in it. kl_se is the mean of the trials' kl_se, not sqrt(sum se^2)/n:
+    config_id / run_name / run_id are the group's best trial (lowest `m`), run_names / config_ids list
+    every trial / config in it. kl_se is the mean of the trials' kl_se, not sqrt(sum se^2)/n:
     every trial is evaluated on the same DAGs and test rows, so their errors
     are strongly correlated and averaging removes far less noise than
     independent errors would (the true SE of the average lies between
@@ -389,9 +388,7 @@ def _group_trials(s, cols, m="mean_kl"):
     rows = []
     for _, g in s.groupby(cols, dropna=False, sort=False):
         best = g.loc[g[m].idxmin()]
-        # id of the tidied settings the group shares: the same group gets the same id
-        # in every table (and it's the config_id the group runs as when chosen)
-        row = {"config_id": config_id({c: best[c] for c in cols}),
+        row = {"config_id": best["config_id"],      # the best trial's config
                "run_id": best["run_id"], "run_name": best["run_name"],
                "run_names": tuple(g.sort_values(m)["run_name"]),   # every trial merged
                "config_ids": tuple(dict.fromkeys(g.sort_values(m)["config_id"])),
@@ -488,8 +485,7 @@ def summarise_trials(trials, n_se=1.0, fixed=None, snap=(), rel_tol=0.0, max_par
                  first), then mean_kl, with the selection metric's columns
                  first (mean_val_loss, val_gap, val_se, or mean_kl,
                  kl_se). Printed tables are indexed by
-                 config_id (of the tidied settings: the same config has
-                 the same id in every table), round lr / weight_decay to 1
+                 config_id (the best trial's), round lr / weight_decay to 1
                  significant figure and hide run_id, run_name, sweep_id, n_dags, fixed
                  settings and settings that are constant across all trials;
                  the returned tables keep every column. Use
@@ -616,12 +612,15 @@ def summarise_trials(trials, n_se=1.0, fixed=None, snap=(), rel_tol=0.0, max_par
         top.attrs["metric"] = metric
         tables[(k, n)] = top
         if show:
-            grouped = "".join(f" ({c} fixed at {v:g})" for c, v in fixed.items())
-            grouped += "".join(f" ({c} snapped to {'-'.join(map(str, g_))} grid)"
-                               for c, g_ in snap)
+            grouped = [f"{c} fixed at {v:g}" for c, v in fixed.items()]
+            grouped += [f"{c} snapped to {'-'.join(map(str, g_))} grid" for c, g_ in snap]
+            order = ("mean_val_loss (lowest first)" if metric == "val_loss"
+                     else "n_trials (most first), then mean_kl (lowest first)")
             print(head + (f" under the size cap (best over all configs {best_all[m]:.4f})"
-                          if caps else "")
-                  + f" -> {len(top)} of {len(s)} configs{grouped} {_threshold(tables)}")
+                          if caps else ""))
+            print(f"  {len(top)} of {len(s)} configs {_threshold(tables)}"
+                  + (f" ({', '.join(grouped)})" if grouped else ""))
+            print(f"  sorted by {order}")
             # config_id first, no run_name, sweep_id or row number
             disp = _for_display(top.drop(columns=[c for c in [*hidden, "run_name", "sweep_id"]
                                                   if c in top])
@@ -690,15 +689,15 @@ def shared_settings_table(tables, min_frac=0.2, show=True):
     return out
 
 
-def common_configs(tables, match_on=("hidden_dims", "lr", "patience", "batch_size"),
+def common_configs(tables, match_on=("hidden_dims", "dropout", "patience", "batch_size"),
                    round_cols=("lr", "weight_decay"), min_tables=2, show=True):
     """Configs in the top (the threshold set in summarise_trials) of
     more than one summarise_trials table.
 
     tables     : the dict returned by summarise_trials.
-    match_on   : setting columns that define "the same config": the discrete
-                 settings and lr (already snapped / rounded by summarise_trials,
-                 so it takes a few values); drop "lr" to match across learning rates.
+    match_on   : setting columns that define "the same config". Continuous
+                 sampled values never repeat exactly, so the default uses the
+                 discrete settings; add e.g. "lr" to also match on it.
     round_cols : columns rounded to 1 significant figure before matching, if
                  they are in match_on (3.2e-4 and 2.8e-4 both become 3e-4).
     Returns one row per config in >= min_tables tables: its settings,
@@ -736,8 +735,7 @@ def _merge_top_configs(tables):
     """Every config in the summarise_trials tables once, with its settings
     (already rounded / snapped / fixed there), as summarise_trials' top_values.
 
-    Columns: config_id (of the tidied settings, as in the tables),
-    run_name / run_id of the merged row's best trial (lowest
+    Columns: run_name / run_id of the merged row's best trial (lowest
     selection metric relative to its table's best; used to name the arm), in_tables
     (every in-degree / sample size table it is top in), n_tables, n_trials
     (distinct configs merged into the row, over all its tables: exact re-runs
@@ -759,8 +757,7 @@ def _merge_top_configs(tables):
             key = tuple(str(v) for v in settings.values())
             # val loss: excess in nats (a ratio of entropy + KL means nothing)
             regret = r[m] - best_m if val else r[m] / best_m - 1
-            entry = rows.setdefault(key, {"config_id": r["config_id"],   # tidied settings' id
-                                          "run_id": r["run_id"], "run_name": r["run_name"],
+            entry = rows.setdefault(key, {"run_id": r["run_id"], "run_name": r["run_name"],
                                           "_regret": regret, "tables": [],
                                           **settings, "run_names": {}, "config_ids": {},
                                           "id_names": {}})
@@ -785,7 +782,7 @@ def _merge_top_configs(tables):
 
 
 def candidate_table(trials, source="candidates", n_se=2.0, rel_tol=0.0, max_params=None,
-                    metric="kl", show=True):
+                    metric="kl", card=None, show=True):
     """Compare chosen configs run on every (in-degree, sample size).
 
     trials : the tuning data (load_trials(RESULTS_DIR)); the rows with
@@ -801,6 +798,9 @@ def candidate_table(trials, source="candidates", n_se=2.0, rel_tol=0.0, max_para
              params recorded there are dropped. The cap is applied first, so
              the thresholds below are from the best candidate under it.
     metric : what the configs are compared on, "kl" (default) or "val_loss".
+    card   : only the runs at this cardinality (rows without card are card 2).
+             Required if the candidate runs have more than one card, so
+             results at different cardinalities are never averaged together.
     One column per (k, N) ("k6 N600"): the config's mean KL over the tuning
     DAGs. In the printed table, a value is bold if it is close to the best
     candidate for that (k, N) (under the size cap, if any): within n_se of
@@ -827,6 +827,11 @@ def candidate_table(trials, source="candidates", n_se=2.0, rel_tol=0.0, max_para
     if "source" not in trials:
         return pd.DataFrame()
     r = trials[trials["source"] == source].copy()
+    r["card"] = r["card"].fillna(TRIAL_DEFAULTS["card"]) if "card" in r else TRIAL_DEFAULTS["card"]
+    if card is not None:
+        r = r[r["card"] == card]
+    elif r["card"].nunique() > 1:
+        raise ValueError(f"candidate runs at cards {sorted(r['card'].unique())}: pass card=")
     if r.empty:
         return pd.DataFrame()
     if metric == "val_loss" and "val_loss" not in r:

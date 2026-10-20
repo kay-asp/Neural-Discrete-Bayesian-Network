@@ -98,6 +98,22 @@
         64
       ],
       "activation": "ReLU"
+    },
+    {
+      "name": "nn_32",
+      "config_id": "3e4d22b3",
+      "max_params_k10": 11272,
+      "lr": 0.0006,
+      "weight_decay": 0.01,
+      "dropout": 0.1,
+      "patience": 50,
+      "batch_size": 32,
+      "optimizer": "adamw",
+      "n_epochs": 1000,
+      "hidden_dims": [
+        32
+      ],
+      "activation": "ReLU"
     }
   ]
 }
