@@ -15,8 +15,8 @@ from sklearn.model_selection import StratifiedKFold, train_test_split
 from tqdm.auto import tqdm
 
 from .evaluation import EPS, cpd_probs
-from .experiments import (_parallel_map, activation_name, fit_estimator, flush,
-                          model_stats, run_settings)
+from .experiments import (NN_HPARAMS, _parallel_map, activation_name, estimator_config_id,
+                          fit_estimator, flush, model_stats, run_settings)
 from .generation import make_seed
 from .models import Cards, NeuralCPDs, nn_probs
 from .training import split_train_val
@@ -351,12 +351,49 @@ def _parts(job, n, data, folds, blocks, fracs, val_frac, seed):
     return sample, train_df, val_df, test_df, np.nan, make_seed("nn", seed, job["fold"], n)
 
 
-def _ests(estimators, disc, dag_level, spec):
-    """Estimators for one (discretisation, DAG, N): a list (the same
-    everywhere) or a dict keyed (disc, dag, spec) (run_selected)."""
+def _ests(estimators, disc, dag_level, spec, fold=None):
+    """Estimators for one (discretisation, DAG, N, fold): a list (the same
+    everywhere) or a dict keyed (disc, dag, spec) or (disc, dag, spec, fold)
+    (run_selected; per fold when each fold was tuned on its own)."""
     if isinstance(estimators, dict):
-        return estimators.get((disc, dag_level, spec), [])
+        return estimators.get((disc, dag_level, spec, fold),
+                              estimators.get((disc, dag_level, spec), []))
     return estimators
+
+
+def at_n(est, n):
+    """The estimator as fitted at N = n rows. An NN with a "batch_rule"
+    {"n_ref": N_ref, "max_batch": B_max, "lr": "sqrt" | "fixed"} gets
+    batch(n) = its batch x n / N_ref, at least its own batch and at most B_max
+    (so steps per epoch stay about as at the tuning size N_ref, where its
+    batch was chosen), and with lr="sqrt" its lr times sqrt(new batch / old)
+    (the square-root scaling rule for Adam); n <= N_ref leaves it unchanged.
+    The rule is fixed in advance, not tuned. Anything else is returned as is."""
+    rule = est.get("batch_rule")
+    if not rule or est["type"] != "nn" or n is None:
+        return est
+    b0 = est.get("batch_size", NN_HPARAMS["batch_size"])
+    b = int(min(max(round(b0 * n / rule["n_ref"]), b0), max(rule["max_batch"], b0)))
+    out = {**est, "batch_size": b}
+    if rule.get("lr", "sqrt") == "sqrt":
+        out["lr"] = est.get("lr", NN_HPARAMS["lr"]) * np.sqrt(b / b0)
+    return out
+
+
+def chosen_estimators(path, names=None):
+    """NN estimators from a chosen-config JSON (experiments.save_chosen_configs),
+    picked by name in the given order, e.g. names=["nn_32", "nn_128_64"]; None
+    takes all. Each runs under its saved name, which is also its family, and
+    records its config_id."""
+    from .experiments import load_chosen_configs
+    configs = load_chosen_configs(path)
+    if names is not None:
+        by_name = {c["name"]: c for c in configs}
+        missing = [n for n in names if n not in by_name]
+        if missing:
+            raise KeyError(f"not in {path}: {missing}; names there: {list(by_name)}")
+        configs = [by_name[n] for n in names]
+    return [{"type": "nn", "family": c["name"], **c} for c in configs]
 
 
 def _real_job(job, data_by_level, dags, cards_by_level, folds, estimators, n_train,
@@ -370,7 +407,7 @@ def _real_job(job, data_by_level, dags, cards_by_level, folds, estimators, n_tra
     records = []
     for n in n_train:
         spec = n_spec(n)
-        todo = [e for e in _ests(estimators, disc, dag_level, spec)
+        todo = [e for e in _ests(estimators, disc, dag_level, spec, fold)
                 if (spec, e["name"]) in job["todo"]]
         if not todo:
             continue
@@ -380,6 +417,7 @@ def _real_job(job, data_by_level, dags, cards_by_level, folds, estimators, n_tra
             unseen, node_unseen = unseen_config_rate(G, sample, test_df)
 
         for est in todo:
+            est = at_n(est, n)              # batch_rule: batch (and lr) for this N
             is_nn = est["type"] == "nn"
             model, fit_time, cpu_time, rss = fit_estimator(
                 est, G, sample, train_df, val_df, cards, n_epochs, seed=nn_seed)
@@ -396,10 +434,15 @@ def _real_job(job, data_by_level, dags, cards_by_level, folds, estimators, n_tra
                 "estimator":    est["name"],
                 "family":       est.get("family", est["name"]),
                 "selected_config": est.get("selected_config", ""),
+                # settings actually fitted (after batch_rule), and the JSON config it came from
+                "config_id":    estimator_config_id(est, n_epochs),
+                "chosen_config_id": est.get("config_id", ""),
                 "type":         est["type"],
                 "hidden_dims":  str(list(est.get("hidden_dims", []))) if is_nn else "",
                 "activation":   activation_name(est) if is_nn else "",
-                "lr":           est.get("lr", np.nan) if is_nn else np.nan,
+                "lr":           est.get("lr", NN_HPARAMS["lr"]) if is_nn else np.nan,
+                "batch_size":   est.get("batch_size", NN_HPARAMS["batch_size"]) if is_nn else np.nan,
+                "batch_rule":   json.dumps(est["batch_rule"]) if est.get("batch_rule") else "",
                 "pseudo_count": est.get("pseudo_count", 0.5) if est["type"] == "dirichlet" else np.nan,
                 "split":        "kfold" if blocks is None else "blocks",
                 "sample_size":  len(sample) + (0 if blocks is None else len(test_df)),  # rows in the dataset
@@ -445,7 +488,9 @@ def run_real_experiments(raw_df, disc_levels, dag_paths, estimators, n_train, k_
 
     raw_df     : load_cdc() output; discretised here per level.
     dag_paths  : DAG level ("high", ...) -> Bayesys CSV.
-    estimators : list of estimator dicts, or {(disc, dag, n_spec): [dicts]}.
+    estimators : list of estimator dicts, or {(disc, dag, n_spec): [dicts]}. An
+                 entry with "n_values" runs only at those N; one with
+                 "batch_rule" scales its batch size (and lr) with N (at_n).
     n_train    : sizes; kfold: training rows (None = whole training fold);
                  blocks: rows in the whole dataset, split train/val/test.
     nn_max_n   : NN estimators are skipped above this N (and for None).
@@ -483,6 +528,8 @@ def run_real_experiments(raw_df, disc_levels, dag_paths, estimators, n_train, k_
     folds_to_run = range(n_units) if folds_to_run is None else folds_to_run
 
     def wanted(est, n):
+        if "n_values" in est and n not in est["n_values"]:     # e.g. a sensitivity check
+            return False
         return est["type"] != "nn" or (n is not None and n <= nn_max_n)
 
     # fold-major, so a run cut short still has the first folds of every panel
@@ -491,7 +538,7 @@ def run_real_experiments(raw_df, disc_levels, dag_paths, estimators, n_train, k_
         for disc in disc_levels:
             for dag_level in dag_paths:
                 todo = {(n_spec(n), e["name"]) for n in n_train
-                        for e in _ests(estimators, disc, dag_level, n_spec(n))
+                        for e in _ests(estimators, disc, dag_level, n_spec(n), fold)
                         if wanted(e, n) and
                         (disc, dag_level, str(fold), n_spec(n), e["name"]) not in done}
                 if todo:
@@ -517,14 +564,27 @@ def run_real_experiments(raw_df, disc_levels, dag_paths, estimators, n_train, k_
     bar.close()
 
 
-def select_real_configs(tuning, metric="val_loglik"):
-    """One candidate per (discretisation, DAG, N, family): the highest mean
-    validation log-likelihood across repeats. Uses validation scores only,
-    and with split="blocks" the repeats are disjoint, so no test row of any
-    repeat informs the choice; the winner is then used in every repeat.
+def select_real_configs(tuning, metric="val_loglik", per_fold=None):
+    """One candidate per (discretisation, DAG, N, family), by validation
+    log-likelihood only.
+
+    per_fold : True picks a winner separately in every fold, from that fold's
+               validation scores (nested CV: its test fold plays no part), and
+               run_selected then uses each fold's own winner. False picks one
+               winner from the mean across folds / repeats, used everywhere.
+               None (default) = per fold for split="kfold", pooled for "blocks".
+               Pooling k-fold scores is refused: fold i's test rows are training
+               and validation rows of the other folds, so a choice averaged
+               over folds has seen every fold's test data. (split="blocks"
+               repeats are disjoint, so pooling them is safe.)
     -> one row per group: selected_config, its mean and SE, the runner-up's
-    gap, and how many repeats the mean rests on."""
-    keys = ["disc_level", "dag_level", "n_train_spec", "family"]
+    gap, and how many folds / repeats the mean rests on (1 per fold)."""
+    kfold = "split" in tuning and (tuning["split"] == "kfold").any()
+    per_fold = kfold if per_fold is None else per_fold
+    if kfold and not per_fold:
+        raise ValueError("k-fold tuning must be selected per fold (per_fold=True): pooling "
+                         "validation scores across folds uses every fold's test rows")
+    keys = ["disc_level", "dag_level", "n_train_spec", "family"] + (["fold"] if per_fold else [])
     g = (tuning.groupby(keys + ["estimator"])[metric]
                .agg(mean="mean", se="sem", n_repeats="count").reset_index()
                .sort_values(keys + ["mean"], ascending=[True] * len(keys) + [False]))
@@ -538,13 +598,17 @@ def select_real_configs(tuning, metric="val_loglik"):
 def run_selected(raw_df, selection, candidates, **kwargs):
     """Refit each selected candidate and score it on the test sets, written
     under its family name with `selected_config` set. Same rows and seeds as
-    the tuning run, so each fit reproduces its tuning fit exactly.
+    the tuning run, so each fit reproduces its tuning fit exactly. A
+    per-fold selection (select_real_configs per_fold=True) runs each fold's
+    own winner in that fold.
     kwargs : as run_real_experiments (same split settings as the tuning)."""
     by_name = {c["name"]: c for c in candidates}
+    per_fold = "fold" in selection
     chosen = {}
     for r in selection.itertuples():
         c = by_name[r.selected_config]
-        chosen.setdefault((r.disc_level, r.dag_level, r.n_train_spec), []).append(
+        key = (r.disc_level, r.dag_level, r.n_train_spec) + ((int(r.fold),) if per_fold else ())
+        chosen.setdefault(key, []).append(
             {**c, "name": c["family"], "selected_config": c["name"]})
     run_real_experiments(raw_df, estimators=chosen, score_test=True, **kwargs)
 

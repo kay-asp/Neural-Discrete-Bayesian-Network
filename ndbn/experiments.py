@@ -739,7 +739,9 @@ def run_configs(configs, k_values, n_dags, n_nodes, alpha, sample_sizes, card, v
     if skip_existing and os.path.exists(trial_csv):
         old = add_config_ids(pd.read_csv(trial_csv))
         if "source" in old:
-            old = old[(old["source"] == source) & old["sample_size"].isin(sample_sizes)]
+            old = with_card(old)          # rows from before card was recorded are card 2
+            old = old[(old["source"] == source) & old["sample_size"].isin(sample_sizes)
+                      & (old["card"] == card)]
             have = (old.drop_duplicates(["config_id", "in_degree", "dag_idx", "sample_size"])
                        .groupby(["config_id", "in_degree"]).size().to_dict())
 
@@ -861,7 +863,26 @@ def arms_from_configs(configs):
     return arms
 
 
-def get_configs(top_values, names):
+def _config_from_trials(n, trials, cols):
+    """The config with config_id (or run_name) `n` in the tuning data, as a
+    top_values-like row with its trial's exact settings, for get_configs; None
+    if `n` is in no trial, or is a run_name of several configs."""
+    for key in ("config_id", "run_name"):
+        hit = trials[trials[key].astype(str) == n] if key in trials else trials.iloc[:0]
+        if len(hit):
+            break
+    if hit.empty or hit["config_id"].nunique() > 1:
+        return None
+    r = hit.iloc[-1]
+    cid, name = r["config_id"], r["run_name"]
+    row = {c: r[c] for c in ["config_id", "run_name", "run_id", *cols] if c in r}
+    row.update(config_ids=(cid,), run_names=(name,), id_names={cid: name})
+    print(f"{n!r} is not in the current tables: using its exact settings from the "
+          f"tuning data ({name})")
+    return pd.Series(row, name=f"trials:{cid}")
+
+
+def get_configs(top_values, names, trials=None):
     """Rows of top_values (from plotting.summarise_trials) by run_name or
     config_id, in the given order, e.g. get_configs(top_values,
     ["30_256_lr3e-4", "a1b2c3d4"]). Row numbers change
@@ -876,12 +897,18 @@ def get_configs(top_values, names):
     with the name of that config's best trial. Raises KeyError if a name matches no row (e.g. the
     config is no longer in any table) or more than one. Names that select a
     row already selected (e.g. two config_ids that become the same config
-    after FIXED / SNAP) are skipped with a note, so each config runs once."""
+    after FIXED / SNAP) are skipped with a note, so each config runs once.
+    trials : the tuning data (plotting.load_trials). A name in no table is then
+             looked up there (by config_id or run_name) and used with that
+             trial's exact settings, with a note, so a selection doesn't break
+             when N_SE / MAX_PARAMS change which configs are in the tables."""
+    from .plotting import _HPARAM_COLS
     arm = top_values["run_name"].astype(str) + "_" + top_values["run_id"].astype(str).str[:4]
     none = pd.Series([()] * len(top_values), index=top_values.index)
     merged = top_values.get("run_names", none)
     ids = top_values.get("config_ids", none)
     rows, labels, kept = [], [], []
+    extra = {}            # configs found only in `trials`, by their row label
     for n in names:
         m = top_values.index[top_values["run_name"] == n]
         if len(m) == 0:
@@ -893,6 +920,17 @@ def get_configs(top_values, names):
             m = top_values.index[top_values["config_id"] == n]
         if by_id and len(m) == 0:
             m = top_values.index[ids.map(lambda cs: n in cs).astype(bool)]
+        if len(m) == 0 and trials is not None:
+            r = _config_from_trials(n, trials, _HPARAM_COLS)
+            if r is not None:
+                if r.name in rows:
+                    print(f"{n!r} is the same config as {kept[rows.index(r.name)]!r}: selected once")
+                    continue
+                extra[r.name] = r
+                rows.append(r.name)
+                kept.append(n)
+                labels.append(r["run_name"])
+                continue
         if len(m) != 1:
             raise KeyError(f"{n!r} matches {len(m)} rows of top_values; run_names: "
                            f"{list(top_values['run_name'])}")
@@ -910,7 +948,10 @@ def get_configs(top_values, names):
                           if "id_names" in top_values else rn)
         else:
             labels.append(rn if n == f"{rn}_{str(ri)[:4]}" else n)
-    out = top_values.loc[rows].copy()
+    # rows from the tables, plus the configs found only in `trials`
+    pool = (pd.concat([top_values, pd.DataFrame(list(extra.values()))])
+            if extra else top_values)
+    out = pool.loc[rows].copy()
     out["run_name"] = labels
     out["requested"] = kept       # what was asked for (save_chosen_configs compares ids)
     return out
