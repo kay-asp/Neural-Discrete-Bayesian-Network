@@ -458,7 +458,8 @@ def run_sweep(arms, k_values, n_dags, n_nodes, alpha, sample_sizes,
 
     Appends one row per run to `sweep_csv` as each run finishes (so an
     interrupted sweep keeps what finished) and writes per-node loss curves to
-    `hist_dir`. Uses cached train.csv (under results_dir) and the same
+    `hist_dir`. Resumable: runs already in `sweep_csv` are skipped, and the
+    returned DataFrame holds every run of this sweep, old and new. Uses cached train.csv (under results_dir) and the same
     train/val splits as the main experiment. n_cached must be the main
     experiment's max(SAMPLE_SIZES), so a train.csv first created here matches
     what the main experiment expects.
@@ -471,24 +472,39 @@ def run_sweep(arms, k_values, n_dags, n_nodes, alpha, sample_sizes,
                  is one run; with W&B each worker opens its own run.
     """
     os.makedirs(hist_dir, exist_ok=True)
-    jobs = []
+    # resumable: (arm, k, dag, sample size) runs already in sweep_csv are skipped
+    done = set()
+    if os.path.exists(sweep_csv):
+        old = with_card(pd.read_csv(sweep_csv))
+        done = set(zip(old["arm"], old["in_degree"], old["dag_idx"], old["sample_size"], old["card"]))
+    jobs, n_done = [], 0
     for k in k_values:
         for dag in range(dag_offset + 1, dag_offset + n_dags + 1):
-            load_dag(results_dir, dag, k, n_nodes, alpha, card, n_cached, n_test)  # cache once
-            jobs += [{"k": k, "dag": dag, "samples": s, "arm": arm, "n_nodes": n_nodes,
-                      "alpha": alpha, "n_epochs": n_epochs}
-                     for s in sample_sizes for arm in arms]
+            todo = [{"k": k, "dag": dag, "samples": s, "arm": arm, "n_nodes": n_nodes,
+                     "alpha": alpha, "n_epochs": n_epochs}
+                    for s in sample_sizes for arm in arms
+                    if (arm["name"], k, dag, s, card) not in done]
+            n_done += len(sample_sizes) * len(arms) - len(todo)
+            if todo:
+                load_dag(results_dir, dag, k, n_nodes, alpha, card, n_cached, n_test)  # cache once
+                jobs += todo
+    if n_done:
+        tqdm.write(f"{n_done} runs already in {os.path.basename(sweep_csv)}, skipped")
 
     run_job = partial(_run_sweep_job, card=card, val_frac=val_frac,
                       wandb_project=wandb_project, hist_dir=hist_dir,
                       results_dir=results_dir, n_cached=n_cached, n_test=n_test,
                       n_jobs=n_jobs)
-    sweep_rows = []
     for row in tqdm(_parallel_map(run_job, jobs, n_jobs, device, torch_threads),
                     total=len(jobs), desc="sweep runs"):
-        sweep_rows.append(row)
         flush([row], sweep_csv)
-    return pd.DataFrame(sweep_rows)
+    # every run of this sweep, including those from earlier sessions
+    sweep_df = with_card(pd.read_csv(sweep_csv)) if os.path.exists(sweep_csv) else pd.DataFrame()
+    names = [a["name"] for a in arms]
+    return sweep_df[sweep_df["arm"].isin(names) & sweep_df["in_degree"].isin(k_values)
+                    & sweep_df["sample_size"].isin(sample_sizes) & (sweep_df["card"] == card)
+                    & sweep_df["dag_idx"].between(dag_offset + 1, dag_offset + n_dags)] \
+        if len(sweep_df) else sweep_df
 
 
 def parse_hidden_dims(spec):

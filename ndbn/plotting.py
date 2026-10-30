@@ -49,6 +49,18 @@ def _colors(n):
     return [cmap(i / max(n - 1, 1)) for i in range(n)]
 
 
+# every series also gets its own marker and line style, so plots read in black and white
+_MARKERS    = ["o", "s", "^", "D", "v", "P", "*", "X"]
+_LINESTYLES = ["-", "--", "-.", ":"]
+
+
+def _styles(n):
+    """(marker, linestyle) for n series; no two series share both (up to 32 series).
+    Each pass through the markers shifts the line styles by one."""
+    return [(_MARKERS[i % len(_MARKERS)],
+             _LINESTYLES[(i + i // len(_MARKERS)) % len(_LINESTYLES)]) for i in range(n)]
+
+
 # ── Core filter helper ──────────────────────────────────────────────────────
 
 def _filter(df, x, hue, alpha=None, sample_size=None,
@@ -151,7 +163,7 @@ def plot_grouped_curves(
         hue_vals = [e for e in names if e in set(hue_vals)]
     colors = _colors(len(hue_vals))
 
-    for hv, c in zip(hue_vals, colors):
+    for hv, c, (m, ls) in zip(hue_vals, colors, _styles(len(hue_vals))):
         s = sub[sub[hue] == hv]
         g = s.groupby(x)[y].agg(["mean", "std", "sem", "count"]).reset_index()
         g = g[g["count"] >= min_obs]
@@ -159,10 +171,10 @@ def plot_grouped_curves(
             continue
         label = f"{hue_label or hue} = {hv}"
         if err in ("std", "sem"):
-            ax.errorbar(g[x], g["mean"], yerr=g[err].fillna(0.0), marker="o",
+            ax.errorbar(g[x], g["mean"], yerr=g[err].fillna(0.0), marker=m, ls=ls,
                         lw=2, color=c, label=label, capsize=3, zorder=3)
         else:
-            ax.plot(g[x], g["mean"], marker="o", lw=2, color=c,
+            ax.plot(g[x], g["mean"], marker=m, ls=ls, lw=2, color=c,
                     label=label, zorder=3)
 
     if logy:
@@ -194,8 +206,8 @@ def plot_cardinality_wall(cards=(2, 3, 4, 5), max_k=12,
         fig, ax = plt.subplots(figsize=figsize)
 
     ks = np.arange(0, max_k + 1)
-    for c, col in zip(cards, _colors(len(cards))):
-        ax.plot(ks, [8 * c ** (k + 1) for k in ks], marker="o", lw=2,
+    for c, col, (m, ls) in zip(cards, _colors(len(cards)), _styles(len(cards))):
+        ax.plot(ks, [8 * c ** (k + 1) for k in ks], marker=m, ls=ls, lw=2,
                 color=col, label=f"card = {c}")
 
     if wall_bytes:
@@ -987,8 +999,8 @@ def plot_node_loglik(node_df, baseline="dirichlet_0.5", sample_size=None,
     if own_fig:
         fig, ax = plt.subplots(figsize=figsize)
     ests = [c for c in mean.columns if c != baseline]
-    for est, c in zip(ests, _colors(len(ests))):
-        ax.scatter(gain["n_parent_configs"], gain[est], s=18, alpha=0.6, color=c, label=est)
+    for est, c, (m, _) in zip(ests, _colors(len(ests)), _styles(len(ests))):
+        ax.scatter(gain["n_parent_configs"], gain[est], s=18, alpha=0.6, color=c, marker=m, label=est)
     ax.axhline(0, color="grey", lw=1)
     ax.set_xscale("log")
     ax.set_xlabel("parent configurations of the node", fontsize=12)
@@ -1003,3 +1015,313 @@ def plot_node_loglik(node_df, baseline="dirichlet_0.5", sample_size=None,
             fig.savefig(out_path, dpi=150)
         return fig, ax
     return ax
+
+
+# ── Report figures ──────────────────────────────────────────────────────────
+# The figures in the report, at the report's column widths. Each function takes
+# the results DataFrame (or file paths) and saves to out_path if given; .png is
+# written at REPORT_DPI. Styling is applied inside each call only, so the
+# exploratory plots above are unaffected.
+
+REPORT_RC = {
+    "font.family": "STIXGeneral", "mathtext.fontset": "stix", "font.size": 8,
+    "axes.labelsize": 8, "legend.fontsize": 6.5, "xtick.labelsize": 7, "ytick.labelsize": 7,
+    "axes.titlesize": 8, "axes.linewidth": 0.6, "lines.linewidth": 1.3, "lines.markersize": 3.5,
+    "axes.spines.top": False, "axes.spines.right": False,
+    "savefig.bbox": "tight", "savefig.pad_inches": 0.02,
+}
+REPORT_DPI = 300
+SINGLE_W, DOUBLE_W = 3.4, 7.0      # column and page widths (inches)
+
+# run names -> the names used in the report
+REPORT_ALIASES = {"nn_32_relu": "nn_32", "01_256x128_lr3e-4": "nn_256_128",
+                  "k6_128_64_9": "nn_128_64", "dirichlet_0.5": "dirichlet"}
+# per estimator: colour, marker + line style, label (same across every figure)
+REPORT_COLORS = {"mle": "#222222", "dirichlet": "#7c3aed", "nn_linear": "#d97706",
+                 "nn_32": "#2563eb", "nn_256_128": "#16a34a", "nn_128_64": "#e11d48",
+                 "nn_256": "#0891b2", "nn_128": "#be185d", "nn_64_32": "#4d7c0f",
+                 "nn_64": "#a16207", "nn_32_16": "#475569"}
+REPORT_FMT    = {"mle": "o-", "dirichlet": "D:", "nn_linear": "s--", "nn_32": "^-.",
+                 "nn_256_128": "P-", "nn_128_64": "*--",
+                 "nn_256": "X-", "nn_128": "v:", "nn_64_32": "h-.", "nn_64": "<--", "nn_32_16": ">:"}
+REPORT_LABELS = {"mle": "MLE", "dirichlet": "Dirichlet"}
+
+
+def _canon(name):
+    return REPORT_ALIASES.get(name, name)
+
+
+def _est_style(name, i=0):
+    """(colour, fmt, label) for an estimator; unknown names get the i-th fallback,
+    whose marker is one no named estimator uses (so it stays distinct in black and white)."""
+    c = _canon(name)
+    used = {f.rstrip("-.:") for f in REPORT_FMT.values()}
+    free = [m for m in _MARKERS + ["h", "<", ">", "p", "d"] if m not in used]
+    fmt = free[i % len(free)] + _LINESTYLES[i % len(_LINESTYLES)]
+    return (REPORT_COLORS.get(c, _PALETTE[i % len(_PALETTE)]),
+            REPORT_FMT.get(c, fmt),
+            REPORT_LABELS.get(c, c))
+
+
+def _shade(i, n, cmap="Blues"):
+    return plt.get_cmap(cmap)(0.35 + 0.65 * i / max(n - 1, 1))
+
+
+def _legend_top(fig, ax, ncol, y=1.08):
+    h, l = ax.get_legend_handles_labels()
+    fig.legend(h, l, loc="upper center", ncol=ncol, frameon=False, bbox_to_anchor=(.5, y))
+
+
+def _save(fig, out_path):
+    fig.tight_layout()
+    if out_path:
+        fig.savefig(out_path, dpi=REPORT_DPI)
+    return fig
+
+
+def _with_card(df):
+    """Rows from before card was recorded were all card=2."""
+    return df.assign(card=df["card"].fillna(2) if "card" in df else 2)
+
+
+def plot_mle_fails(df, estimator="mle", sample_size=1000, alpha=0.5,
+                   ks=None, out_path=None):
+    """(a) KL and (b) CPT memory vs in-degree, one line per network size, stacked."""
+    m = df[(df.estimator == estimator) & (df.sample_size == sample_size) & (df.alpha == alpha)]
+    nodes = sorted(m.n_nodes.unique())
+    with plt.rc_context(REPORT_RC):
+        fig, ax = plt.subplots(2, 1, figsize=(SINGLE_W, 3.6), sharex=True)
+        for i, ((mk, ls), n) in enumerate(zip(_styles(len(nodes)), nodes)):
+            s = m[m.n_nodes == n].groupby("in_degree")
+            fmt = dict(marker=mk, ls=ls, color=_shade(i, len(nodes)))
+            ax[0].plot(s.kl.mean().index, s.kl.mean(), label=f"{n} nodes", **fmt)
+            ax[1].plot(s.memory_bytes.mean().index, s.memory_bytes.mean() / 1024, **fmt)
+        ax[0].set_ylim(bottom=0); ax[1].set_ylim(bottom=0)
+        ax[0].set_ylabel("KL divergence (nats)"); ax[1].set_ylabel("CPT memory (KB)")
+        for a, t in zip(ax, ["(a) KL divergence", "(b) CPT memory"]):
+            a.set_xticks(ks or sorted(m.in_degree.unique())); a.set_title(t, loc="left")
+        ax[1].set_xlabel("Parent in-degree $k$")
+        _legend_top(fig, ax[0], 3, 1.07)
+        return _save(fig, out_path)
+
+
+def plot_no_es(hist_dir, archs=("nn_32", "nn_64_32", "nn_128_64"), k=10, n=600, card=None, out_path=None):
+    """Training and validation loss without early stopping, mean over the DAGs
+    whose histories are in hist_dir (hist_{arch}_c{card}_k{k}_d*_n{n}.npz, or
+    hist_{arch}_k{k}_d*_n{n}.npz from before card was in the name)."""
+    from glob import glob
+    import os
+    with plt.rc_context(REPORT_RC):
+        fig, axs = plt.subplots(1, len(archs), figsize=(DOUBLE_W, 1.75), sharey=True, squeeze=False)
+        for ax, arch in zip(axs[0], archs):
+            files = sorted(glob(os.path.join(hist_dir, f"hist_{arch}_c{card or '*'}_k{k}_d*_n{n}.npz"))
+                           + glob(os.path.join(hist_dir, f"hist_{arch}_k{k}_d*_n{n}.npz")))
+            if not files:
+                print(f"WARNING: no histories for {arch} in {hist_dir}")
+                continue
+            tr = np.mean([np.load(f)["train"].sum(0) for f in files], 0)
+            va = np.mean([np.load(f)["val"].sum(0) for f in files], 0)
+            ep = np.arange(1, len(tr) + 1)
+            ax.plot(ep, tr, "--", color="#888", label="training")
+            ax.plot(ep, va, "-", color="#2563eb", label="validation")
+            b = va.argmin(); ax.plot(ep[b], va[b], "o", color="#2563eb", ms=4)
+            ax.annotate(f"min @ {ep[b]}", (ep[b], va[b]), xytext=(4, -10), textcoords="offset points",
+                        fontsize=6.5, color="#2563eb")
+            ax.set_title(arch, loc="left"); ax.set_xlabel("Epoch")
+        axs[0, 0].set_ylabel("Summed cross-entropy"); axs[0, 0].legend(frameon=False)
+        return _save(fig, out_path)
+
+
+def plot_sweep_lr(trials, sweeps, out_path=None):
+    """Mean KL vs learning rate per sweep trial, coloured and marked by hidden layers.
+
+    sweeps : {in-degree: W&B sweep id}. Only runs scored on every cell of the
+    sweep (all DAGs x sample sizes) are shown.
+    """
+    t = trials[trials.sweep_id.isin(sweeps.values())]
+    if "source" in t:          # sweep trials only, not candidate runs added to the sweep
+        t = t[t["source"].fillna("sweep") == "sweep"]
+    # one colour + marker per hidden-layer setting, the same in every panel
+    hds = sorted(t.hidden_dims.unique(), key=lambda h: (len(str(h)), str(h)))
+    with plt.rc_context(REPORT_RC):
+        fig, axs = plt.subplots(1, len(sweeps), figsize=(DOUBLE_W, 1.8), squeeze=False)
+        for ax, (k, sid) in zip(axs[0], sweeps.items()):
+            g = (t[t.sweep_id == sid].groupby("run_id")
+                 .agg(lr=("lr", "first"), hd=("hidden_dims", "first"), kl=("kl", "mean"), n=("kl", "size")))
+            g = g[g.n == g.n.max()]
+            for i, ((mk, _), hd) in enumerate(zip(_styles(len(hds)), hds)):
+                q = g[g.hd == hd]
+                ax.scatter(q.lr, q.kl, s=9, color=_PALETTE[i % len(_PALETTE)], marker=mk, alpha=.8, lw=0,
+                           label=str(hd).strip("[]()").replace(", ", "-").rstrip(","))
+            ax.set_xscale("log"); ax.set_title(f"$k={k}$", loc="left"); ax.set_xlabel("Learning rate")
+        axs[0, 0].set_ylabel("Mean KL (tuning DAGs)")
+        _legend_top(fig, axs[0, 0], 4, 1.1)
+        return _save(fig, out_path)
+
+
+_SETTING = ["n_nodes", "in_degree", "alpha", "sample_size", "dag_idx"]
+
+
+def plot_estimators_by_k(df, estimators, param_nodes=20, out_path=None):
+    """(a) KL and (b) free parameters vs in-degree, one line per estimator, on
+    the settings every estimator was run on."""
+    sub = df[df.estimator.isin(estimators)]
+    shared = sub.groupby(_SETTING).estimator.nunique()
+    shared = shared[shared == len(estimators)].reset_index()[_SETTING]
+    sub = sub.merge(shared, on=_SETTING)
+    with plt.rc_context(REPORT_RC):
+        fig, axs = plt.subplots(1, 2, figsize=(DOUBLE_W, 1.95))
+        for i, e in enumerate(estimators):
+            c, fmt, lab = _est_style(e, i)
+            q = sub[sub.estimator == e].groupby("in_degree").kl.mean()
+            axs[0].plot(q.index, q, fmt, color=c, label=lab)
+            p = sub[(sub.estimator == e) & (sub.n_nodes == param_nodes)].groupby("in_degree").free_params.mean()
+            axs[1].plot(p.index, p, fmt, color=c)
+        for a, t, yl in zip(axs, ["(a) KL divergence", f"(b) Free parameters ({param_nodes} nodes)"],
+                            ["KL divergence (nats)", "Free parameters"]):
+            a.set_yscale("log"); a.set_xticks(sorted(sub.in_degree.unique()))
+            a.set_xlabel("Parent in-degree $k$"); a.set_title(t, loc="left"); a.set_ylabel(yl)
+        _legend_top(fig, axs[0], len(estimators), 1.1)
+        return _save(fig, out_path)
+
+
+def plot_kl_vs_n(df, estimators, in_degrees=None, out_path=None):
+    """KL vs training rows, one panel per in-degree, one line per estimator."""
+    in_degrees = in_degrees or sorted(df.in_degree.unique())
+    with plt.rc_context(REPORT_RC):
+        fig, axs = plt.subplots(1, len(in_degrees), figsize=(DOUBLE_W, 1.75), squeeze=False)
+        for ax, k in zip(axs[0], in_degrees):
+            for i, e in enumerate(estimators):
+                c, fmt, lab = _est_style(e, i)
+                q = df[(df.estimator == e) & (df.in_degree == k)].groupby("sample_size").kl.mean()
+                ax.plot(q.index, q, fmt, color=c, label=lab)
+            ax.set_yscale("log"); ax.set_xticks(sorted(df.sample_size.unique()))
+            ax.set_title(f"$k={k}$", loc="left"); ax.set_xlabel("Training rows $N$")
+        axs[0, 0].set_ylabel("KL divergence (nats)")
+        _legend_top(fig, axs[0, 0], len(estimators), 1.1)
+        return _save(fig, out_path)
+
+
+def plot_size_alpha(df, estimators, out_path=None):
+    """Mean KL (a) by network size and (b) by the Dirichlet alpha of the true CPTs."""
+    with plt.rc_context(REPORT_RC):
+        fig, axs = plt.subplots(1, 2, figsize=(DOUBLE_W, 1.8))
+        for i, e in enumerate(estimators):
+            c, fmt, lab = _est_style(e, i)
+            q = df[df.estimator == e].groupby("n_nodes").kl.mean(); axs[0].plot(q.index, q, fmt, color=c, label=lab)
+            q = df[df.estimator == e].groupby("alpha").kl.mean();   axs[1].plot(q.index, q, fmt, color=c)
+        axs[0].set_xlabel("Network size (nodes)")
+        axs[1].set_xlabel(r"Dirichlet $\alpha$ of the true CPTs"); axs[1].set_xticks(sorted(df.alpha.unique()))
+        for a, t in zip(axs, ["(a) By network size", "(b) By ground-truth concentration"]):
+            a.set_yscale("log"); a.set_ylabel("KL divergence (nats)"); a.set_title(t, loc="left")
+        _legend_top(fig, axs[0], len(estimators), 1.1)
+        return _save(fig, out_path)
+
+
+def plot_ratio_vs_rho(df, baseline="mle", estimator="nn_32_relu", n_nodes=20, alpha=0.5, out_path=None):
+    """KL(baseline) / KL(estimator) vs rows per parent configuration rho = N / r^k,
+    one marker per in-degree. Returns (fig, table of the plotted points)."""
+    w = (_with_card(df[(df.n_nodes == n_nodes) & (df.alpha == alpha)])
+         .pivot_table(index=["in_degree", "sample_size", "card", "dag_idx"], columns="estimator", values="kl")
+         .reset_index())
+    w["rho"] = w.sample_size / w.card ** w.in_degree
+    w["ratio"] = w[baseline] / w[estimator]
+    g = (w.groupby(["in_degree", "sample_size"]).agg(rho=("rho", "first"), ratio=("ratio", "mean"))
+         .reset_index().sort_values("rho"))
+    c, _, lab = _est_style(estimator)
+    with plt.rc_context(REPORT_RC):
+        fig, ax = plt.subplots(figsize=(SINGLE_W, 1.9))
+        ax.plot(g.rho, g.ratio, "-", color=c, lw=.7, alpha=.5)
+        ks = sorted(g.in_degree.unique())
+        for (mk, _), k in zip(_styles(len(ks)), ks):
+            s = g[g.in_degree == k]
+            ax.plot(s.rho, s.ratio, mk, color=c, mfc="white", ms=4.5, label=f"$k={k}$")
+        ax.axhline(1, color="#999", lw=.6, ls=":"); ax.set_xscale("log"); ax.set_ylim(0, None)
+        ax.set_xlabel(r"Rows per parent configuration $\rho = N/r^{k}$")
+        ax.set_ylabel(f"KL({_est_style(baseline)[2]}) / KL({lab})"); ax.legend(frameon=False)
+        return _save(fig, out_path), g
+
+
+def _n_label(n):
+    return f"{n / 1000:.0f}k" if n >= 1000 else f"{n:.0f}"
+
+
+def real_loglik_panel(ax, s, estimators, err="std", baseline="mle", title=None, ylab=False):
+    """Held-out log-likelihood vs N on ax. Baseline means below the other
+    estimators' range are drawn as open triangles on the bottom edge with their
+    value, instead of a line leaving the axes."""
+    other = s[(s.estimator != baseline) & s.estimator.isin(estimators)]
+    lo, hi = other.groupby(["estimator", "sample_size"]).loglik.mean().agg(["min", "max"])
+    pad = 0.08 * (hi - lo); ylo, yhi = lo - 2.2 * pad, hi + pad
+    for i, e in enumerate(estimators):
+        c, fmt, lab = _est_style(e, i)
+        q = s[s.estimator == e].groupby("sample_size").loglik.agg(["mean", err])
+        bar = dict(fmt=fmt, color=c, label=lab, capsize=1.5, elinewidth=.6)
+        if e != baseline:
+            ax.errorbar(q.index, q["mean"], yerr=q[err], **bar)
+            continue
+        inr, out = q[q["mean"] >= ylo], q[q["mean"] < ylo]
+        if len(inr):
+            ax.errorbar(inr.index, inr["mean"], yerr=inr[err], **bar)
+        else:
+            ax.plot([], [], fmt, color=c, label=lab)
+        ybar = ylo + 0.35 * pad
+        for xv, row in out.iterrows():
+            ax.plot(xv, ybar, "v", color=c, mfc="white", ms=4, clip_on=False)
+            ax.annotate(f"{row['mean']:.1f}", (xv, ybar), xytext=(4, 2), textcoords="offset points",
+                        ha="left", fontsize=6, color=c)
+        if len(inr) and len(out):   # dotted link from the edge marker to the first in-range point
+            ax.plot([out.index[-1], inr.index[0]], [ybar, inr["mean"].iloc[0]], ":", color=c, lw=.8)
+    ns = sorted(s.sample_size.unique())
+    ax.set_xscale("log"); ax.set_xlim(ns[0] / 1.5, ns[-1] * 1.6)
+    ax.set_xticks(ns); ax.set_xticklabels([_n_label(n) for n in ns]); ax.minorticks_off()
+    ax.set_ylim(ylo, yhi); ax.set_xlabel("Training rows $N$")
+    if title: ax.set_title(title, loc="left")
+    if ylab: ax.set_ylabel("Held-out log-likelihood (nats/row)")
+    return ax
+
+
+def plot_real_mean(res, estimators, err="std", out_path=None):
+    """Held-out log-likelihood vs N, averaged over every discretisation and DAG."""
+    mean = res.groupby(["estimator", "sample_size", "fold"], as_index=False).loglik.mean()
+    with plt.rc_context(REPORT_RC):
+        fig, ax = plt.subplots(figsize=(SINGLE_W, 2.2))
+        real_loglik_panel(ax, mean, estimators, err=err, ylab=True)
+        _legend_top(fig, ax, 3, 1.13)
+        return _save(fig, out_path)
+
+
+def plot_real_grid(res, estimators, disc_levels, dag_levels, err="std", out_path=None):
+    """Held-out log-likelihood vs N: one panel per (discretisation, DAG confidence)."""
+    with plt.rc_context(REPORT_RC):
+        fig, axs = plt.subplots(len(disc_levels), len(dag_levels), squeeze=False,
+                                figsize=(DOUBLE_W, 1.8 * len(disc_levels)))
+        for i, dl in enumerate(disc_levels):
+            for j, gl in enumerate(dag_levels):
+                real_loglik_panel(axs[i, j], res[(res.disc_level == dl) & (res.dag_level == gl)], estimators,
+                                  err=err, title=f"{dl}, {gl} confidence", ylab=(j == 0))
+        _legend_top(fig, axs[0, 0], len(estimators), 1.04)
+        return _save(fig, out_path)
+
+
+def plot_real_unseen(res, disc_levels, dag_levels, estimator="mle", out_path=None):
+    """Fraction of test parent configurations unseen in training vs N, one line
+    per (discretisation, DAG confidence); the rate is the same for every estimator."""
+    with plt.rc_context(REPORT_RC):
+        fig, ax = plt.subplots(figsize=(SINGLE_W, 1.9))
+        sets = [(dl, gl) for dl in disc_levels for gl in dag_levels]
+        cmaps = ["Blues", "Reds", "Greens", "Purples"]
+        for i, ((dl, gl), (mk, ls)) in enumerate(zip(sets, _styles(len(sets)))):
+            j = dag_levels.index(gl)
+            q = (res[(res.disc_level == dl) & (res.dag_level == gl) & (res.estimator == estimator)]
+                 .groupby("sample_size").unseen_rate.mean())
+            ax.plot(q.index, 100 * q, marker=mk, ls=ls, label=f"{dl}, {gl}",
+                    color=_shade(disc_levels.index(dl), len(disc_levels), cmaps[j % len(cmaps)]))
+        ax.set_xscale("log"); ax.set_xlabel("Training rows $N$")
+        ax.set_ylabel("Unseen parent configurations (%)")
+        # above the axes, one column per DAG confidence, so it never covers the lines
+        h, l = ax.get_legend_handles_labels()
+        order = [i * len(dag_levels) + j for j in range(len(dag_levels)) for i in range(len(disc_levels))]
+        fig.legend([h[i] for i in order], [l[i] for i in order], loc="lower center",
+                   ncol=len(dag_levels), frameon=False, bbox_to_anchor=(.5, 1.0))
+        return _save(fig, out_path)
