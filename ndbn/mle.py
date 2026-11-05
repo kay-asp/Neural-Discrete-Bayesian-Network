@@ -19,7 +19,7 @@ def fit_mle(G, data, cards):
     return model
 
 # MLE with a small symmetric Dirichlet pseudocount
-def fit_mle_pseudocount(G, data, cards, pseudo_count=0.5):
+def fit_dirichlet(G, data, cards, pseudo_count=0.5):
     cards = Cards.coerce(cards, G.nodes())
     m = DiscreteBayesianNetwork(list(G.edges()))
     m.add_nodes_from(G.nodes())

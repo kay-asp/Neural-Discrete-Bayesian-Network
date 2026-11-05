@@ -564,10 +564,16 @@ def run_real_experiments(raw_df, disc_levels, dag_paths, estimators, n_train, k_
     bar.close()
 
 
-def select_real_configs(tuning, metric="val_loglik", per_fold=None):
-    """One candidate per (discretisation, DAG, N, family), by validation
-    log-likelihood only.
+def select_real_configs(tuning, metric="val_loglik", per_fold=None,
+                        group_by=None):
+    """Best candidate per group, by validation log-likelihood only.
 
+    group_by : columns that define a selection group (besides ``"family"`` and,
+               when per_fold is active, ``"fold"``).  Default (None) is the
+               original full-granularity grouping
+               ``["disc_level", "dag_level", "n_train_spec"]``.  Pass ``[]``
+               for one winner per family (per fold): validation scores are
+               averaged over every disc × DAG × N combination.
     per_fold : True picks a winner separately in every fold, from that fold's
                validation scores (nested CV: its test fold plays no part), and
                run_selected then uses each fold's own winner. False picks one
@@ -584,7 +590,9 @@ def select_real_configs(tuning, metric="val_loglik", per_fold=None):
     if kfold and not per_fold:
         raise ValueError("k-fold tuning must be selected per fold (per_fold=True): pooling "
                          "validation scores across folds uses every fold's test rows")
-    keys = ["disc_level", "dag_level", "n_train_spec", "family"] + (["fold"] if per_fold else [])
+    if group_by is None:
+        group_by = ["disc_level", "dag_level", "n_train_spec"]
+    keys = group_by + ["family"] + (["fold"] if per_fold else [])
     g = (tuning.groupby(keys + ["estimator"])[metric]
                .agg(mean="mean", se="sem", n_repeats="count").reset_index()
                .sort_values(keys + ["mean"], ascending=[True] * len(keys) + [False]))
@@ -601,15 +609,36 @@ def run_selected(raw_df, selection, candidates, **kwargs):
     the tuning run, so each fit reproduces its tuning fit exactly. A
     per-fold selection (select_real_configs per_fold=True) runs each fold's
     own winner in that fold.
+
+    The selection may be coarse (e.g. one winner per family per fold, without
+    disc/dag/n columns): the chosen config is then used for every combination
+    of the missing dimensions.
     kwargs : as run_real_experiments (same split settings as the tuning)."""
     by_name = {c["name"]: c for c in candidates}
     per_fold = "fold" in selection
-    chosen = {}
-    for r in selection.itertuples():
-        c = by_name[r.selected_config]
-        key = (r.disc_level, r.dag_level, r.n_train_spec) + ((int(r.fold),) if per_fold else ())
-        chosen.setdefault(key, []).append(
-            {**c, "name": c["family"], "selected_config": c["name"]})
+    has_disc = "disc_level" in selection
+    has_dag  = "dag_level" in selection
+    has_n    = "n_train_spec" in selection
+
+    if has_disc and has_dag and has_n:
+        chosen = {}
+        for r in selection.itertuples():
+            c = by_name[r.selected_config]
+            key = (r.disc_level, r.dag_level, r.n_train_spec) + ((int(r.fold),) if per_fold else ())
+            chosen.setdefault(key, []).append(
+                {**c, "name": c["family"], "selected_config": c["name"]})
+    else:
+        estimators = []
+        for r in selection.itertuples():
+            c = by_name[r.selected_config]
+            est = {**c, "name": c["family"], "selected_config": c["name"]}
+            if per_fold:
+                est["fold"] = int(r.fold)
+            estimators.append(est)
+        seen = set()
+        chosen = [e for e in estimators if (e["name"], e.get("fold")) not in seen
+                  and not seen.add((e["name"], e.get("fold")))]
+
     run_real_experiments(raw_df, estimators=chosen, score_test=True, **kwargs)
 
 
