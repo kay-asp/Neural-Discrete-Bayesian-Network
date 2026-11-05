@@ -267,6 +267,42 @@ def unseen_config_rate(G, train_df, test_df):
     return float(any_unseen.mean()), per_node
 
 
+# ---- diagnosis --------------------------------------------------------------
+
+def diagnosis_probs(model, G, test_df, cards, target=TARGET):
+    """P(target | every other variable) for each row -> (N, cards[target]).
+
+    Only the target's Markov blanket matters: q(target | its parents) times
+    q(child | its parents) for each child, with the target set to each state in
+    turn, normalised over the target's states. Every other factor of the joint
+    is the same for all target states and cancels, so this is exact inference
+    for any estimator. Probabilities are floored at EPS, as in held_out_logprob.
+    """
+    q_of = probs_fn(model, cards)
+    logp = np.log(np.clip(q_of(target, test_df), EPS, None))
+    for child in G.successors(target):
+        x = test_df[child].to_numpy(np.int64)
+        for t in range(cards[target]):
+            q = q_of(child, test_df.assign(**{target: t}))
+            logp[:, t] += np.log(np.clip(q[np.arange(len(x)), x], EPS, None))
+    p = np.exp(logp - logp.max(axis=1, keepdims=True))
+    return p / p.sum(axis=1, keepdims=True)
+
+
+def diagnosis_scores(model, G, test_df, cards, target=TARGET):
+    """AUROC, Brier score and log-loss of P(target = 1 | everything else) on test_df
+    (binary target)."""
+    from sklearn.metrics import roc_auc_score
+    if cards[target] != 2:
+        raise ValueError(f"{target} has {cards[target]} states; diagnosis scores need a binary target")
+    p1 = diagnosis_probs(model, G, test_df, cards, target)[:, 1]
+    y = test_df[target].to_numpy()
+    p_obs = np.where(y == 1, p1, 1 - p1)
+    return {"diag_auroc":   float(roc_auc_score(y, p1)),
+            "diag_brier":   float(np.mean((p1 - y) ** 2)),
+            "diag_logloss": float(-np.mean(np.log(np.clip(p_obs, EPS, None))))}
+
+
 # ---- runner -----------------------------------------------------------------
 
 KEYS = ["disc_level", "dag_level", "fold", "n_train_spec", "estimator"]
@@ -354,11 +390,12 @@ def _parts(job, n, data, folds, blocks, fracs, val_frac, seed):
 def _ests(estimators, disc, dag_level, spec, fold=None):
     """Estimators for one (discretisation, DAG, N, fold): a list (the same
     everywhere) or a dict keyed (disc, dag, spec) or (disc, dag, spec, fold)
-    (run_selected; per fold when each fold was tuned on its own)."""
+    (run_selected; per fold when each fold was tuned on its own). A list entry
+    with a "fold" key (run_selected's per-fold winners) applies to that fold only."""
     if isinstance(estimators, dict):
         return estimators.get((disc, dag_level, spec, fold),
                               estimators.get((disc, dag_level, spec), []))
-    return estimators
+    return [e for e in estimators if e.get("fold") in (None, fold)]
 
 
 def at_n(est, n):
@@ -472,6 +509,7 @@ def _real_job(job, data_by_level, dags, cards_by_level, folds, estimators, n_tra
                     "node_loglik":  json.dumps(node_ll),
                     "node_unseen":  json.dumps(node_unseen),
                     "node_floored": json.dumps(floored),
+                    **diagnosis_scores(model, G, test_df, cards),   # P(Diabetes | the rest)
                 })
             records.append(rec)
     return records
