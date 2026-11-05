@@ -14,7 +14,7 @@ from tqdm.auto import tqdm
 
 from .evaluation import kl_mle, kl_nn, mle_param_stats, timed_fit
 from .generation import gen_CPTs, gen_dag_indegree, make_seed
-from .mle import fit_mle, fit_mle_pseudocount
+from .mle import fit_mle, fit_dirichlet
 from . import models as _models
 from .models import NeuralCPDs
 from .tracing import Trace, history_matrix
@@ -213,7 +213,7 @@ def fit_estimator(est, G, sample, train_df, val_df, cards, n_epochs, seed):
     if est["type"] == "mle":
         return timed_fit(fit_mle, G, sample, cards)
     if est["type"] == "dirichlet":
-        return timed_fit(fit_mle_pseudocount, G, sample, cards,
+        return timed_fit(fit_dirichlet, G, sample, cards,
                          pseudo_count=est.get("pseudo_count", 0.5))
     # optional tuned hyperparameters (lr, weight_decay, dropout, ...) pass through
     kw = {x: est[x] for x in NN_HPARAMS if x in est}

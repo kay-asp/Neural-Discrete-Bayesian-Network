@@ -9,7 +9,7 @@ Code lives in `ndbn/`; the experiments are run from four notebooks:
 
 | Notebook | Purpose |
 |---|---|
-| `1_mle.ipynb` | Ground-truth generation, estimator tests, shared settings, MLE-only run (RQ1) |
+| `1_setup_and_checks.ipynb` | Ground-truth generation, estimator tests, setup checks (shared settings in `ndbn/settings.py`) |
 | `2_hyperparameter_tuning.ipynb` | Architecture / hyperparameter sweeps and selection of the final neural CPDs |
 | `3_main_experiments.ipynb` | MLE vs neural CPDs on the evaluation networks (RQ1 + RQ2), plots, serial timing run |
 | `4_real_data.ipynb` | Real-data extension: CDC Diabetes Health Indicators on expert-elicited DAGs |
@@ -75,7 +75,7 @@ distributions; $\alpha = 1$ is uniform over the simplex.
 | In-degree $k$ | 1–10, depending on scenario | 2, 4, 6, 8, 10 |
 | Density | Controlled ranges (0.05–1.00) | Not controlled; follows from $n$ and $k$, recorded |
 | Cardinality | Not specified | Binary ($r = 2$) |
-| Dirichlet $\alpha$ | Not specified | 0.5 (the MLE-only run in `1_mle.ipynb` also uses 0.1) |
+| Dirichlet $\alpha$ | Not specified | 0.5 (the MLE-only run in `1_setup_and_checks.ipynb` also uses 0.1) |
 | Networks per configuration | "Multiple" | 5 random DAGs (evaluation DAGs 1–5) |
 | Sample budget $N$ (train + val) | Fixed across $k$ | 200, 600, 1000, 1400, the same for every $k$ |
 
@@ -111,7 +111,7 @@ the data gets pgmpy's default (uniform) column. A child state never seen under a
 configuration keeps probability 0, which is floored at $10^{-12}$ when KL / log-likelihood are
 computed.
 
-**Added:** a Dirichlet pseudocount (Bayesian) estimator, `fit_mle_pseudocount`. It is used as the
+**Added:** a Dirichlet pseudocount (Bayesian) estimator, `fit_dirichlet`. It is used as the
 main tabular baseline on real data, where plain MLE's zero probabilities dominate the score.
 
 ### Neural CPDs (`ndbn/models.py`, `ndbn/training.py`)

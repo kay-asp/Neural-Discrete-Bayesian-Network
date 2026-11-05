@@ -1,4 +1,8 @@
-"""Load notebooks' settings cells, so other notebooks can share them."""
+"""Load notebooks' settings cells, so other notebooks can share them.
+
+Deprecated: notebooks now import shared settings from ndbn.settings directly.
+This module is kept for backward compatibility with test scripts.
+"""
 import json
 import types
 
@@ -6,15 +10,8 @@ import types
 def load_notebook_config(*paths, tag="config"):
     """Run the cells tagged `tag` in the notebook(s) at `paths`; return their names.
 
-    Each setting is defined once, in the notebook it belongs to (cells tagged
-    "config"), and later notebooks load them, e.g.
-        globals().update(load_notebook_config("1_mle.ipynb", "2_hyperparameter_tuning.ipynb"))
-    The notebooks' tagged cells run in the given order in one shared
-    namespace, so a later notebook's settings can use an earlier one's (e.g.
-    RESULTS_DIR). Lines starting with % or ! (notebook magics) are skipped, so
-    each tagged cell must do its own imports. Returns the public names they
-    define (no leading _, no modules).
-    This reads the *saved* files: save a notebook after editing its settings.
+    .. deprecated::
+        Notebooks now import from ``ndbn.settings`` instead of using this.
     """
     ns = {}
     for path in paths:
