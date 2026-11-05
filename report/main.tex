@@ -39,8 +39,8 @@
 
 
 \author[1]{Kaylin Aspoas}
-\author[1]{Ritesh Ajoodha\,\textnormal{\itshape (Supervisor)}}
-\author[1]{Aashna Gaogle\,\textnormal{\itshape (Co-supervisor)}}
+\author[1]{Ritesh Ajoodha\texorpdfstring{\,\textnormal{\itshape (Supervisor)}}{ (Supervisor)}}
+\author[1]{Aashna Gaogle\texorpdfstring{\,\textnormal{\itshape (Co-supervisor)}}{ (Co-supervisor)}}
 
 \affiliation[1]{organization={School of Computer Science and Applied Mathematics, University of the Witwatersrand},
             city={Johannesburg},
@@ -389,7 +389,7 @@ This report addressed that limitation by replacing traditional conditional proba
 
 \subsection{Limitations}
 
-The synthetic networks use cardinalities of 2 and 4 with a fixed in-degree per node and independently drawn Dirichlet CPTs; they do not reproduce the noise, correlation structure or class imbalance of clinical data, which the real-data experiment addresses only in part. \provisional{A smoothed tabular estimator was not included in the synthetic grid,} the tuned networks were run on a subset of it, and hyperparameters were tuned separately for each cardinality at $n=20$ and $\alpha=0.5$. Continuous variables must be discretised, which loses information. Finally, a neural CPD is less directly readable than a CPT: the graph remains interpretable, but each local distribution has to be queried rather than read off a table.
+The synthetic networks use cardinalities of 2 and 4 with a fixed in-degree per node and independently drawn Dirichlet CPTs; they do not reproduce the noise, correlation structure or class imbalance of clinical data, which the real-data experiment addresses only in part. The tuned networks were run on a subset of it, and hyperparameters were tuned separately for each cardinality at $n=20$ and $\alpha=0.5$. Continuous variables must be discretised, which loses information. Finally, a neural CPD is less directly readable than a CPT: the graph remains interpretable, but each local distribution has to be queried rather than read off a table.
 
 \subsection{Future Work}
 
