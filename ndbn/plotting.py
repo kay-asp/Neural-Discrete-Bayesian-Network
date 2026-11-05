@@ -1349,6 +1349,38 @@ def plot_real_mean(res, estimators, err="std", out_path=None):
         return _save(fig, out_path)
 
 
+DIAG_METRICS = [("diag_auroc", "AUROC", "higher"), ("diag_brier", "Brier score", "lower"),
+                ("diag_logloss", "Log-loss (nats)", "lower")]
+
+
+def plot_real_diagnosis(res, estimators, prevalence=None, err="std", out_path=None):
+    """Diagnostic accuracy of P(Diabetes | every other variable) vs N: one panel
+    per metric, each point the mean over every discretisation and DAG (then
+    mean and `err` over folds). prevalence: the positive rate; draws the score
+    of always predicting it as a dotted reference line."""
+    mean = res.groupby(["estimator", "sample_size", "fold"], as_index=False)[
+        [m for m, _, _ in DIAG_METRICS]].mean()
+    ref = None if prevalence is None else {
+        "diag_auroc": 0.5, "diag_brier": prevalence * (1 - prevalence),
+        "diag_logloss": -(prevalence * np.log(prevalence) + (1 - prevalence) * np.log(1 - prevalence))}
+    ns = sorted(mean.sample_size.unique())
+    with plt.rc_context(REPORT_RC):
+        fig, axs = plt.subplots(1, len(DIAG_METRICS), figsize=(DOUBLE_W, 1.9))
+        for ax, (m, lab, better) in zip(axs, DIAG_METRICS):
+            for i, e in enumerate(estimators):
+                c, fmt, elab = _est_style(e, i)
+                q = mean[mean.estimator == e].groupby("sample_size")[m].agg(["mean", err])
+                ax.errorbar(q.index, q["mean"], yerr=q[err], fmt=fmt, color=c, label=elab,
+                            capsize=1.5, elinewidth=.6)
+            if ref is not None:
+                ax.axhline(ref[m], color="#999", lw=.7, ls=":", label="Prevalence only")
+            ax.set_xscale("log"); ax.set_xlim(ns[0] / 1.5, ns[-1] * 1.6)
+            ax.set_xticks(ns); ax.set_xticklabels([_n_label(n) for n in ns]); ax.minorticks_off()
+            ax.set_xlabel("Training rows $N$"); ax.set_title(f"{lab} ({better} is better)", loc="left")
+        _legend_top(fig, axs[0], len(estimators) + (ref is not None), 1.12)
+        return _save(fig, out_path)
+
+
 def plot_real_grid(res, estimators, disc_levels, dag_levels, err="std", out_path=None):
     """Held-out log-likelihood vs N: one panel per (discretisation, DAG confidence)."""
     with plt.rc_context(REPORT_RC):
