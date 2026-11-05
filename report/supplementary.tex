@@ -2,6 +2,7 @@
 
 \usepackage[authoryear,longnamesfirst]{natbib}
 \usepackage{amsmath,amssymb}
+\graphicspath{{./}{../}}   % figures live in ../figs when compiling from report/
 
 \ExplSyntaxOn
 \cs_set:Npn \__first_footerline:
@@ -33,13 +34,13 @@ This document contains supplementary figures and tables referenced in the main r
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=\textwidth]{figs/no_es.pdf}
+\includegraphics[width=\textwidth]{figs/no_es.png}
 \caption{Summed training and validation cross-entropy without early stopping ($r=2$, $k=10$, $N=600$, mean over five tuning DAGs). The marker shows the lowest validation loss.}\label{fig:noes}
 \end{figure}
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=\textwidth]{figs/sweep.pdf}
+\includegraphics[width=\textwidth]{figs/sweep_c2.png}
 \caption{Bayesian hyperparameter sweeps ($r=2$). Each point is one trial's mean KL over five tuning DAGs and two sample sizes; colour indicates the hidden layers (log-scaled x-axis).}\label{fig:sweep}
 \end{figure}
 
@@ -63,13 +64,13 @@ Configuration & $N{=}600$ & $N{=}1400$ & $N{=}600$ & $N{=}1400$ & $N{=}600$ & $N
 \begin{figure}[h]
 \centering
 \includegraphics[width=0.82\textwidth]{figs/dag_moderate.png}
-\caption{Moderate-confidence expert DAG for the CDC Diabetes Health Indicators data \citep{zahoor2024investigatingvaliditystructurelearning}. Black edges form the high-confidence DAG; red edges are added at moderate confidence.}\label{fig:dag}
+\caption{Moderate-confidence expert DAG for the CDC Diabetes Health Indicators data \citep{zahoor2025investigatingvaliditystructurelearning}. Black edges form the high-confidence DAG; red edges are added at moderate confidence.}\label{fig:dag}
 \end{figure}
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=\textwidth]{figs/real_unseen.pdf}
-\caption{Percentage of test parent configurations never observed in training, for each discretisation and DAG combination (log-scaled x-axis).}\label{fig:unseen}
+\includegraphics[width=\textwidth]{figs/real_unseen.png}
+\caption{Percentage of test rows in which at least one node's parent configuration never occurs in the training data, for each discretisation and DAG combination (log-scaled x-axis).}\label{fig:unseen}
 \end{figure}
 
 \bibliographystyle{cas-model2-names}

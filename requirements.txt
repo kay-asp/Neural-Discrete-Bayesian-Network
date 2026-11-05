@@ -1,0 +1,27 @@
+# Python 3.14. Pinned to the versions the results were produced with.
+# Also needs the Graphviz system binary (`dot`) for the DAG figures, e.g. `sudo apt install graphviz`.
+
+# models and experiments
+numpy==2.5.3
+pandas==3.0.5
+torch==2.14.0          # results.csv was written with 2.14.1+cu130; network fits may differ in the last digits
+pgmpy==1.1.2           # estimator API changes between versions: keep this exact
+networkx==3.6.1
+scikit-learn==1.9.1
+joblib==1.6.0
+psutil==7.2.2
+tqdm==4.70.1
+
+# real data and figures
+ucimlrepo==0.0.7
+matplotlib==3.11.2
+graphviz==0.21
+
+# notebooks
+ipykernel==7.3.0
+ipython==9.17.1
+ipywidgets==8.1.9
+nbformat==5.11.1
+
+# hyperparameter sweeps only (optional; set WANDB_MODE=disabled to skip logging)
+wandb==0.30.0

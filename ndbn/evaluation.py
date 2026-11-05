@@ -58,6 +58,20 @@ def kl_nn(true_model, nets, test_data, cards):
     )
 
 
+def unseen_config_share(G, train_data, cards):
+    """Share of all parent configurations, summed over every node with parents,
+    that never occur in train_data. cards : an int (shared) or node -> cardinality."""
+    cards = Cards.coerce(cards, G.nodes())
+    seen = total = 0
+    for v in G.nodes():
+        pa = sorted(G.predecessors(v))
+        if not pa:
+            continue
+        total += int(np.prod([cards[p] for p in pa]))
+        seen += len(train_data[pa].drop_duplicates())
+    return 1 - seen / total if total else 0.0
+
+
 def mle_param_stats(model):
 
     nodes = list(model.nodes())

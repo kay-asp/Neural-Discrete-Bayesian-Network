@@ -72,7 +72,7 @@ Bayesian networks offer a promising way to approach this problem because they re
 
 This creates the central problem addressed in this research. Deep learning models are powerful enough to capture complex patterns, but they are often difficult to interpret. Bayesian networks are easier to understand, but their traditional learning methods may be too limited for complex medical relationships. To combine these strengths, this research investigates whether neural networks can be used within the interpretable structure of a Bayesian network to improve its ability to capture complex relationships.
 
-The contribution of this work is threefold. First, it characterises where and how tabular estimators such as Maximum Likelihood Estimation (MLE) fail in discrete Bayesian networks, and shows that the failure is governed by the number of training rows available per parent configuration, which falls as in-degree or cardinality increases, or as sample size decreases. Second, it evaluates neural conditional probability distributions (CPDs) as a drop-in replacement for conditional probability tables (CPTs) at cardinalities 2 and 4, reducing divergence from the ground truth by over 8-fold in the most data-scarce regime. Third, it applies the framework to a real clinical dataset with an expert-elicited structure.
+The contribution of this work is threefold. First, it characterises where and how tabular estimators such as Maximum Likelihood Estimation (MLE) fail in discrete Bayesian networks, and shows that the failure is governed by the number of training rows available per parent configuration, which falls as in-degree or cardinality increases, or as sample size decreases. Second, it evaluates neural conditional probability distributions (CPDs) as a drop-in replacement for conditional probability tables (CPTs) at cardinalities 2 and 4, reducing KL divergence from the ground truth by up to about 7 times relative to unsmoothed MLE at $r=2$ (about 11 times at $r=4$), with the largest reduction near one training row per parent configuration, although a smoothed tabular estimator matched to the generating prior remains more accurate on these synthetic networks. Third, it applies the framework to a real clinical dataset with an expert-elicited structure.
 
 The remainder of this report is organised as follows. Section~\ref{sec:related} reviews existing work on interpretable medical prediction, parameter estimation for discrete Bayesian networks, and approaches that combine predictive performance with explainability. Section~\ref{sec:method} presents the methodology, including the experimental design and evaluation approach. Section~\ref{sec:results} presents the results, and Section~\ref{sec:conclusion} concludes and outlines future work.
 
@@ -132,20 +132,20 @@ To evaluate parameter estimation performance under controlled conditions, synthe
 
 The ground-truth DAGs are produced by a single generator that controls in-degree directly. The $n$ nodes are shuffled into a random topological order, and the node at position $i$ is given exactly $\min(k,i)$ parents, sampled uniformly from the nodes before it. Every node past the first $k$ therefore has in-degree exactly $k$. Graph density is not targeted, but follows from $n$ and $k$ and is recorded for each realised graph; it ranges from 0.10 ($n=40$, $k=2$) to 1.00 ($n=10$, $k=10$).
 
-Each graph is then parameterised by drawing every column of every ground-truth CPT independently from a symmetric Dirichlet distribution, $P^*(X_i\mid \mathrm{pa}) \sim \mathrm{Dir}(\alpha,\dots,\alpha)$. A smaller $\alpha$ gives sharper, more peaked distributions, and $\alpha = 1$ is uniform over the simplex. Because columns are drawn independently, the ground truth contains no structure shared across parent configurations, which makes it a demanding test for any estimator that relies on sharing.
+Each graph is then parameterised by drawing every column of every ground-truth CPT independently from a symmetric Dirichlet distribution, $P^*(X_i\mid \mathrm{pa}) \sim \mathrm{Dir}(\alpha,\dots,\alpha)$. A smaller $\alpha$ gives sharper, more peaked distributions, and $\alpha = 1$ is uniform over the simplex. Because columns are drawn independently, the ground truth contains no structure shared across parent configurations: the rows observed under one configuration carry no information about any other. Sharing parameters across configurations therefore cannot help in expectation, and the best an estimator can do is smooth each configuration towards the mean of the generating prior, which is uniform. This makes the synthetic grid a test of how close an estimator comes to that optimum without being told the prior, rather than a test of whether sharing helps.
 
-Table~\ref{tab:grid} lists the experimental settings, which are crossed in full, giving 900 configurations per estimator. To reflect the data scarcity characteristic of real clinical settings, the number of training samples is held constant as in-degree increases, so that any observed degradation in parameter estimation performance is attributable to the growing complexity of the conditional probability space rather than variation in data availability. Five random DAGs are generated per setting.
+Table~\ref{tab:grid} lists the experimental settings, which are crossed in full for every estimator, giving 500 configurations at $r=2$ and 300 at $r=4$. To reflect the data scarcity characteristic of real clinical settings, the number of training samples is held constant as in-degree increases, so that any observed degradation in parameter estimation performance is attributable to the growing complexity of the conditional probability space rather than variation in data availability. Five random DAGs are generated per setting.
 
 \begin{table}[tbp]
-\caption{Synthetic experimental grid. The binary ($r{=}2$) grid gives 500 configurations for MLE, \texttt{nn\_linear} and \texttt{nn\_32}, and 220 for the tuned networks; the $r{=}4$ subset marked $\dagger$ adds 180 configurations per estimator.}\label{tab:grid}
+\caption{Synthetic experimental grid. Every setting is crossed in full for every estimator: 500 configurations at $r{=}2$ and 300 at $r{=}4$, which uses the values marked $\dagger$.}\label{tab:grid}
 \begin{tabular*}{\tblwidth}{@{\extracolsep{\fill}}ll@{}}
 \toprule
 Setting & Values \\
 \midrule
 Network size $n$ & 10$^\dagger$, 20$^\dagger$, 30$^\dagger$, 40, 50 \\
-Parent in-degree $k$ & 2$^\dagger$, 4$^\dagger$, 6$^\dagger$, 8$^\dagger$, 10 \\
+Parent in-degree $k$ & 2$^\dagger$, 4$^\dagger$, 6$^\dagger$, 8$^\dagger$, 10$^\dagger$ \\
 Dirichlet $\alpha$ & 0.5$^\dagger$ \\
-Training rows $N$ & 200, 600$^\dagger$, 1000$^\dagger$, 1400$^\dagger$ \\
+Training rows $N$ & 200$^\dagger$, 600$^\dagger$, 1000$^\dagger$, 1400$^\dagger$ \\
 Cardinality $r$ & 2, 4$^\dagger$ \\
 DAGs per setting & 5 \\
 Test sample (KL only) & 10\,000 rows \\
@@ -161,7 +161,7 @@ Synthetic datasets are generated through ancestral sampling from each ground-tru
 
 The primary baseline is Maximum Likelihood Estimation, which estimates CPT parameters with Eq.~\eqref{eq:mle} over the full state space. A parent configuration that never appears in the data is assigned a uniform distribution. A child state never observed under an observed configuration keeps a probability of zero, which is floored at $10^{-12}$ when divergences are computed.
 
-Bayesian parameter estimation (BPE) avoids these zeros by adding a symmetric Dirichlet pseudocount of 0.5 to every cell before normalising, $\hat P = (N_{ijk}+0.5)/(N_{ij}+0.5r)$. This Dirichlet estimator is included alongside MLE in the synthetic failure analysis, and is the main tabular baseline on real data, where plain MLE's zero probabilities dominate the score.
+Bayesian parameter estimation (BPE) avoids these zeros by adding a symmetric Dirichlet pseudocount $a$ to every cell before normalising, $\hat P = (N_{ijk}+a)/(N_{ij}+ar)$. Two pseudocounts are used. The Dirichlet estimator uses $a=0.5$, the same value as the generating $\alpha$. Since every ground-truth column is an independent $\mathrm{Dir}(0.5,\dots,0.5)$ draw, this estimator is the exact posterior mean of each column, which minimises expected KL divergence from the ground truth; on synthetic data it is therefore a \emph{matched-prior reference}, the best achievable by any estimator given the data, rather than a competitor that neural CPDs are expected to beat. The Laplace estimator uses $a=1$, i.e.\ add-one smoothing. It is a standard default that does not depend on the generator, and shows how much of the reference's advantage comes from knowing $\alpha$. On real data, where no generating prior exists, the pseudocount is selected on validation data (Section~\ref{sec:method}) and the Dirichlet estimator is the main tabular baseline, since plain MLE's zero probabilities dominate the score.
 
 \subsubsection{Neural CPDs}
 
@@ -177,44 +177,51 @@ This allows the neural network to approximate discrete conditional probability d
 \begin{equation*}
 \mathcal{L}(\theta)=-\frac{1}{N}\sum_{s=1}^{N}\log P_\theta\big(x_i^{(s)} \mid \mathrm{pa}_i^{(s)}\big),
 \end{equation*}
-where $x_i^{(s)}$ is the observed node state and $\mathrm{pa}_i^{(s)}$ is the observed parent configuration \citep[Sec.~6.2.1.1]{goodfellow2016deep}. One network is trained per node. For neural CPDs, 20\% of the training rows are held out as a validation subset, and each node is early-stopped independently on validation cross-entropy. MLE fits on all $N$ rows, so the neural estimators see fewer rows, not more.
+where $x_i^{(s)}$ is the observed node state and $\mathrm{pa}_i^{(s)}$ is the observed parent configuration \citep[Sec.~6.2.1.1]{goodfellow2016deep}. One network is trained per node. For neural CPDs, a share of the $N$ training rows is held out as a validation subset (30\% on synthetic data, 20\% on real data), and each node is early-stopped independently on validation cross-entropy. MLE fits on all $N$ rows, so the neural estimators see fewer rows, not more.
 
-Table~\ref{tab:estimators} lists the estimators. The linear softmax, with no hidden layer, is equivalent to L2-penalised multinomial logistic regression fitted per node; it shares parameters across configurations but cannot represent interactions between parents, and so acts as a control for the effect of the hidden layer. \texttt{nn\_32} has a single hidden layer of 32 units with default settings, and the two deeper networks were selected by the tuning procedure below.
+Table~\ref{tab:estimators} lists the estimators. The linear softmax, with no hidden layer, is equivalent to L2-penalised multinomial logistic regression fitted per node; it shares parameters across configurations but cannot represent interactions between parents, and so acts as a control for the effect of the hidden layer. The linear softmax is untuned. Every other network, including \texttt{nn\_32}, was configured separately for each cardinality by the tuning procedure in Section~\ref{sec:archsel}, and Table~\ref{tab:estimators} gives the settings used.
 
-\begin{table}[tbp]
-\caption{Estimators. Untuned networks use Adam \citep{kingma2015adam} with weight decay $10^{-4}$, batch size 64 and patience 20; tuned networks use AdamW \citep{loshchilov2019decoupled} with weight decay 0.01.}\label{tab:estimators}
-\begin{tabular*}{\tblwidth}{@{\extracolsep{\fill}}llp{3.1cm}@{}}
+\begin{table*}[tbp]
+\caption{Estimators. Tuned networks use ReLU hidden layers, AdamW \citep{loshchilov2019decoupled}, at most 1000 epochs and per-node early stopping. Their settings are given as learning rate / weight decay / dropout / batch size / patience; -- means the architecture was not run at that cardinality.}\label{tab:estimators}
+\begin{tabular*}{\tblwidth}{@{\extracolsep{\fill}}lll l@{}}
 \toprule
-Estimator & Form & Settings \\
+Estimator & Form & $r=2$ & $r=4$ \\
 \midrule
-\texttt{mle} & CPT & Uniform for unseen configurations \\
-\texttt{dirichlet} & CPT & Pseudocount 0.5 \\
-\texttt{nn\_linear} & No hidden layer & Tuned per cardinality \\
-\texttt{nn\_32} & 32 ReLU & Tuned per cardinality \\
-\texttt{nn\_64\_32} & 64--32 ReLU & Tuned per cardinality \\
-\texttt{nn\_128\_64} & 128--64 ReLU & Tuned per cardinality \\
-\texttt{nn\_256} & 256 ReLU & Tuned per cardinality \\
+\texttt{mle} & CPT & \multicolumn{2}{l}{Uniform for unseen configurations} \\
+\texttt{dirichlet} & CPT & \multicolumn{2}{l}{Pseudocount 0.5 (matches $\alpha$; synthetic reference)} \\
+\texttt{laplace} & CPT & \multicolumn{2}{l}{Pseudocount 1 (add-one smoothing)} \\
+\texttt{nn\_linear} & No hidden layer & \multicolumn{2}{l}{Untuned: Adam \citep{kingma2015adam}, $10^{-3}$ / $10^{-4}$ / 0 / 64 / 20, at most 200 epochs (1000 on real data)} \\
+\texttt{nn\_32} & 32 & $6{\times}10^{-4}$ / 0.01 / 0.1 / 32 / 50 & $6{\times}10^{-4}$ / 0 / 0.3 / 64 / 50 \\
+\texttt{nn\_32\_16} & 32--16 & -- & $10^{-3}$ / 0 / 0.3 / 32 / 50 \\
+\texttt{nn\_64} & 64 & $6{\times}10^{-4}$ / 0.01 / 0.1 / 128 / 50 & -- \\
+\texttt{nn\_64\_32} & 64--32 & $6{\times}10^{-4}$ / 0.01 / 0.1 / 128 / 50 & $6{\times}10^{-4}$ / 0 / 0.3 / 32 / 50 \\
+\texttt{nn\_128} & 128 & $6{\times}10^{-4}$ / 0.01 / 0.1 / 128 / 50 & -- \\
+\texttt{nn\_128\_64} & 128--64 & $3{\times}10^{-4}$ / 0.01 / 0.1 / 128 / 50 & $6{\times}10^{-4}$ / 0 / 0.3 / 32 / 50 \\
+\texttt{nn\_256} & 256 & $6{\times}10^{-4}$ / 0.01 / 0.1 / 128 / 50 & $6{\times}10^{-4}$ / 0 / 0 / 32 / 10 \\
+\texttt{nn\_256\_128} & 256--128 & $3{\times}10^{-4}$ / 0.01 / 0.1 / 128 / 20 & -- \\
 \bottomrule
 \end{tabular*}
-\end{table}
+\end{table*}
 
-\subsection{Neural CPD Architecture Selection}
+\subsection{Neural CPD Architecture Selection}\label{sec:archsel}
 
 Architecture selection proceeded in three stages. First, an initial sweep of fixed architectures was run without early stopping at $k=10$ to establish overfitting behaviour (Supplementary Figure~S1). Larger networks overfit quickly, confirming that early stopping on validation loss is essential; every network in the main experiments uses it.
 
-Second, Bayesian hyperparameter sweeps were conducted separately for $r=2$ and $r=4$, each at multiple in-degrees (Supplementary Figure~S2). For $r=2$, sweeps at $k=6$ and $k=10$ covered learning rate, hidden layers, dropout, weight decay, batch size and patience, each trial scored by mean KL over five tuning DAGs. For $r=4$, analogous sweeps were run at $k=2$, $k=6$ and $k=10$. At both cardinalities, moderately large single-layer networks (256 units) and two-layer networks (128--64, 256--128) dominated the sweeps, with learning rates near $3$--$6\times10^{-4}$.
+Second, Bayesian hyperparameter sweeps were conducted separately for $r=2$ and $r=4$, each at multiple in-degrees (Supplementary Figure~S2). For each cardinality, sweeps at $k=2$, 6 and 10 (20-node tuning networks, $N\in\{600,1400\}$) covered learning rate, hidden layers, dropout, weight decay (fixed at 0 for $r=4$), batch size and patience. At $r=2$ each trial was scored by its mean KL divergence over five tuning DAGs, which is legitimate because the tuning DAGs are disjoint from the evaluation DAGs; at $r=4$ trials were scored by mean validation loss, which does not use the ground truth. At both cardinalities, moderately large single-layer networks (256 units) and two-layer networks (128--64, 256--128) dominated the sweeps, with learning rates near $3$--$6\times10^{-4}$.
 
-Third, the best sweep configurations were re-run on every tuning setting to select final candidates. The tuned configurations were retained for the architecture comparison, but the main synthetic comparison uses \texttt{nn\_32}, a single hidden layer of 32~units. Although \texttt{nn\_32} is not the most accurate architecture, it performs within 30\% of the best tuned network at $r=4$ and the gap narrows as the number of parent configurations grows, while holding up to 66 times fewer parameters and training substantially faster. All tuning was performed on a separate set of tuning DAGs disjoint from the evaluation DAGs, so no evaluation test set influenced any choice.
+Third, the best sweep configurations were re-run on every tuning setting to select final candidates. The six larger $r=2$ architectures were selected on mean KL divergence over the tuning DAGs; \texttt{nn\_32} at $r=2$ and every $r=4$ configuration were selected on mean validation loss. The tuned configurations were retained for the architecture comparison, but the main synthetic comparison uses \texttt{nn\_32}, a single hidden layer of 32~units. Although \texttt{nn\_32} is not the most accurate architecture, its KL divergence is on average 17\% above that of the best tuned network at $r=2$ and 8\% above at $r=4$, where the gap shrinks as in-degree grows (from 20\% at $k=2$ to 2\% at $k=10$), while it holds 2 to 66 times fewer parameters than the tuned architectures at $k=10$ in 20-node networks (1.4 to 11 times at $r=4$). All tuning was performed on a separate set of tuning DAGs disjoint from the evaluation DAGs, so no evaluation test set influenced any choice.
 
-\subsection{Real-World Application}
+\subsection{Real-World Application}\label{sec:realdata}
 
 The real-data component uses the CDC Diabetes Health Indicators dataset \citep{cdc_diabetes_2023}, drawn from the 2015 Behavioral Risk Factor Surveillance System (BRFSS), comprising 253\,680 survey responses across 21 health-related variables and a binary diabetes indicator. BRFSS is publicly available, fully de-identified, and exempt from institutional review board oversight.
 
-The graph structure for this dataset is taken from the expert-elicited diabetes DAGs published by \citet{zahoor2024investigatingvaliditystructurelearning}, at three expert-confidence levels (Supplementary Figure~S3). Only the DAG is taken from experts; all parameters are learned.
+The graph structure for this dataset is taken from the expert-elicited diabetes DAGs published by \citet{zahoor2025investigatingvaliditystructurelearning}, at three expert-confidence levels (Supplementary Figure~S3). Only the DAG is taken from experts; all parameters are learned.
 
 Because responses are collected by a structured survey instrument, every variable except body mass index is natively categorical, so the discretisations compared are defined by the survey instrument rather than chosen here. The coarsest setting (L1) reproduces the collapsing applied in practice to keep conditional probability tables estimable, and matches the published marginals to within one percentage point. L2 uses the categories as collected (for example, 13 age bands, 8 income bands and the WHO body mass index classes), and L3 additionally bins body mass index and the day-count variables more finely. Varying discretisation therefore varies $\rho$ through cardinality, with the graph held fixed.
 
-On this data, estimator performance is assessed by three-fold cross-validation, stratified on diabetes status. Within each training fold, nested subsets of $N\in\{500, 2000, 10\,000, 50\,000\}$ rows are drawn, allowing the ratio of parent configurations to available samples to be varied independently of discretisation granularity. Neural CPDs hold out 20\% of each subset for early stopping, so no test fold influences model selection. All nine combinations of discretisation (L1, L2, L3) and DAG confidence (high, moderate, low) are evaluated.
+On this data, estimator performance is assessed by three-fold cross-validation, stratified on diabetes status. Within each training fold, nested subsets of $N\in\{500, 2000, 10\,000, 50\,000\}$ rows are drawn, allowing the ratio of parent configurations to available samples to be varied independently of discretisation granularity. Neural CPDs hold out 20\% of each subset for early stopping, so no test fold influences model selection. The networks are \texttt{nn\_32} and \texttt{nn\_128\_64}, with hidden layers, dropout, base batch size and patience fixed at their $r=4$ values (Table~\ref{tab:estimators}), AdamW without weight decay and at most 1000 epochs, together with the linear softmax at its untuned defaults. Because the real-data sample sizes reach far beyond the tuning sizes, the batch size is scaled with $N$ by a rule fixed before any run: the tuned batch size times $N/1400$, kept between the tuned value and 1024, so that the number of optimisation steps per epoch stays close to that at the largest tuning size (for \texttt{nn\_32}, batches of 64, 91, 457 and 1024 at the four values of $N$).
+
+Two hyperparameters are tuned by nested cross-validation: the learning rate of each network ($3\times10^{-4}$, $10^{-3}$ or $3\times10^{-3}$, with every other setting fixed as above) and the Dirichlet pseudocount (0.1, 0.5 or 1.0). MLE and the linear softmax have none. Within each outer fold, every candidate is scored by its mean log-likelihood on the validation 20\% of each $N$-row subset: the networks as fitted with early stopping on those rows, and the Dirichlet candidates refitted on the remaining 80\%. For each estimator, the candidate with the highest validation log-likelihood, averaged with equal weight over all 36 combinations of discretisation, DAG and $N$, is selected separately in each fold. One value is chosen per fold rather than per combination because a single combination's validation set is small (100 rows at $N=500$), and because a pseudocount encodes a prior belief that should not depend on $N$; both families are tuned under the same protocol. The selected candidate is then refitted with the same rows and seeds, the Dirichlet estimator on the whole $N$-row subset, and scored once on that fold's test set, which plays no part in any choice. Every fold selected a learning rate of $3\times10^{-3}$ for both networks and a pseudocount of 1.0, in each case the largest value in its grid. All nine combinations of discretisation (L1, L2, L3) and DAG confidence (high, moderate, low) are evaluated.
 
 \subsection{Evaluation}
 
@@ -226,15 +233,15 @@ The primary metric for the synthetic experiments is the Kullback-Leibler diverge
 where $P^*_{i}$ and $\hat P_{i}$ are the true and learned distributions of $X_i$ given its parents, and $P^*_{is}(x_i) = P^*(x_i\mid \mathrm{pa}_i^{(s)})$, with $\hat P_{is}$ defined likewise.
 The inner sum over each child's states is exact; only the parent configurations are sampled. Because KL is summed over nodes it scales with network size, so it is reported per node where network sizes are compared.
 
-Since the ground-truth conditional distributions are unavailable for real data, predictive performance is assessed by the mean held-out log-likelihood per row, $\frac{1}{S}\sum_s\sum_i \log\hat P(x_i^{(s)}\mid\mathrm{pa}_i^{(s)})$. The expected held-out negative log-likelihood is the cross-entropy $H(P^*,\hat P) = H(P^*) + \KL(P^*\,\|\,\hat P)$, and since $H(P^*)$ does not depend on the estimator, differences in log-likelihood are exactly differences in KL divergence. The ranking of estimators therefore transfers from the synthetic setting, while the absolute divergence from truth does not. The unseen-configuration rate, the fraction of test parent configurations never observed in training, is also reported.
+Since the ground-truth conditional distributions are unavailable for real data, predictive performance is assessed by the mean held-out log-likelihood per row, $\frac{1}{S}\sum_s\sum_i \log\hat P(x_i^{(s)}\mid\mathrm{pa}_i^{(s)})$. The expected held-out negative log-likelihood is the cross-entropy $H(P^*,\hat P) = H(P^*) + \KL(P^*\,\|\,\hat P)$, and since $H(P^*)$ does not depend on the estimator, differences in log-likelihood are exactly differences in KL divergence. The ranking of estimators therefore transfers from the synthetic setting, while the absolute divergence from truth does not. The unseen-configuration rate, the fraction of test rows in which at least one node's parent configuration never occurs in the training data, is also reported.
 
-Alongside these measures of accuracy, the computational cost of each estimator is recorded. Free parameters are counted as $(r-1)$ times the number of configurations for a CPT, and every weight and bias for a network. Training time is recorded separately in a serial run, since parallel execution inflates wall-clock times.
+Alongside these measures of accuracy, the computational cost of each estimator is recorded. Free parameters are counted as $(r-1)$ times the number of configurations for a CPT, and every weight and bias for a network. On real data, training time is recorded in a separate serial run, since parallel execution inflates wall-clock times; synthetic fit times come from the parallel main runs and are indicative only.
 
 \section{Results}\label{sec:results}
 
 \subsection{How Tabular Methods Fail}
 
-The synthetic setup reproduces the well-known behaviour of tabular estimators under sparse data \citep[Sec.~17.2]{learning_oniko_2001,koller2009probabilistic}. Both MLE and the Dirichlet estimator estimate each parent configuration from its own counts, so their CPTs grow exponentially with in-degree. Figure~\ref{fig:mle} shows that, for MLE, KL divergence and CPT memory both rise sharply once a node's parent configurations ($2^k$) outnumber the training rows: in 40-node networks, KL rises from 0.28 to 58 nats and memory from 2.5 to 508\,KB as in-degree goes from 2 to 10. \pending{Dirichlet KL divergence as in-degree increases.}
+The synthetic setup reproduces the well-known behaviour of tabular estimators under sparse data \citep[Sec.~17.2]{learning_oniko_2001,koller2009probabilistic}. Both MLE and the Dirichlet estimator estimate each parent configuration from its own counts, so their CPTs grow exponentially with in-degree. Figure~\ref{fig:mle} shows that, for MLE, KL divergence and CPT memory both rise sharply once a node's parent configurations ($2^k$) outnumber the training rows: in 40-node networks, KL rises from 0.18 to 58 nats and memory from 2.5 to 508\,KB as in-degree goes from 2 to 10. \pending{Dirichlet KL divergence as in-degree increases.}
 
 \begin{figure}[pos=tbp]
 \centering
@@ -242,7 +249,7 @@ The synthetic setup reproduces the well-known behaviour of tabular estimators un
 \caption{Tabular estimators on synthetic networks ($r=2$) as in-degree increases ($N=1000$, $\alpha=0.5$, mean over five DAGs; darker is larger). KL divergence to the ground truth for (a) MLE and (b) the Dirichlet estimator (shared log-scaled y-axis). (c) Total CPT memory, the same for both.}\label{fig:mle}
 \end{figure}
 
-The cause is data coverage rather than computation. In 20-node networks at $N=1000$, the share of parent configurations never seen in training rises from 0.5\% at $k=2$ to 78\% at $k=10$, while every MLE fit takes under one second. Both tabular estimators assign a uniform distribution to every unseen configuration, since the Dirichlet pseudocount alone carries no information about it, so smoothing removes zero probabilities but cannot recover these columns. Tabular estimation therefore degrades smoothly as the number of rows per parent configuration falls.
+The cause is data coverage rather than computation. In 20-node networks at $N=1000$, the share of all parent configurations (summed over every node with parents) never seen in training rises from 0.5\% at $k=2$ to 78\% at $k=10$, while every MLE fit takes under one second. Both tabular estimators assign a uniform distribution to every unseen configuration, since the Dirichlet pseudocount alone carries no information about it, so smoothing removes zero probabilities but cannot recover these columns. Tabular estimation therefore degrades smoothly as the number of rows per parent configuration falls.
 
 \FloatBarrier
 \subsection{Neural CPD Architectures}
@@ -259,7 +266,7 @@ The linear softmax is a useful control: it shares parameters across parent confi
 
 Figure~\ref{fig:arms}(b) shows the cost of each estimator in free parameters. The CPT grows exponentially with $r^k$, while the networks grow only linearly, because their input width is the sum rather than the product of parent cardinalities. Even so, the tuned networks hold far more parameters than the tables they replace: \texttt{nn\_256} holds 89\,896 free parameters at $k=10$, $r=2$, eight times as many as the CPT's 11\,263. Neural CPDs therefore do not save parameters. What they save is data, by sharing statistical strength across parent configurations, which is a statistical-efficiency argument rather than a storage one.
 
-The differences between the MLPs are small by comparison. At $r=2$, \texttt{nn\_32} averages 1.95 times the KL of the best tuned architecture across settings, but at $r=4$ the gap narrows: \texttt{nn\_32} is within 3\% of the best at high in-degree ($k\geq6$) and within 30\% even at $k=2$. The architecture choice is also stable across cardinalities: \texttt{nn\_256} and \texttt{nn\_128\_64} alternate as the best tuned network at both $r=2$ and $r=4$, and the ranking among the MLPs does not change with sample size or in-degree. Because \texttt{nn\_32} holds up to 66 times fewer parameters, trains substantially faster (mean 202\,s vs.\ $>$900\,s per network), and is the most robust to overfitting (Supplementary Figure~S1), it is used as the neural CPD for the remainder of the synthetic results.
+The differences between the MLPs are small by comparison. On average \texttt{nn\_32} has 17\% higher KL divergence than the best tuned architecture at $r=2$ and 8\% higher at $r=4$, where the gap shrinks with in-degree from 20\% at $k=2$ to 2\% at $k=10$. No single architecture is best everywhere: at $r=2$, \texttt{nn\_256} is the best tuned network in 231 of the 500 configurations and \texttt{nn\_128\_64} in 97, while at $r=4$ \texttt{nn\_128\_64} and \texttt{nn\_256} are best in 132 and 114 of the 300. Because \texttt{nn\_32} holds 2 to 66 times fewer parameters than the tuned architectures at $k=10$ ($r=2$, 20 nodes) and is the most robust to overfitting (Supplementary Figure~S1), it is used as the neural CPD for the remainder of the synthetic results.
 
 \FloatBarrier
 \subsection{Neural CPDs Compared with MLE}
@@ -272,7 +279,7 @@ Figure~\ref{fig:klN} shows how each estimator responds to more data. More rows h
 \caption{KL divergence against training rows at each in-degree ($r=2$, mean over all network sizes and five DAGs; log-scaled y-axis).}\label{fig:klN}
 \end{figure*}
 
-Figure~\ref{fig:sizealpha} shows KL divergence over different ground-truth distributions. MLE degrades fastest with network size and with flatter true CPTs. As networks grow from 5 to 40 nodes, MLE's mean KL rises from 0.05 to 15.7 nats against 0.02 to 1.85 for \texttt{nn\_32}, so the ratio between them grows from 2.8 to 8.5. Peaked ground truths ($\alpha=0.1$) concentrate the data on fewer configurations and keep MLE's error low, at 1.9 times that of \texttt{nn\_32}. Flat ground truths ($\alpha=1$) spread the data across all configurations, and MLE's error rises to 12 times that of \texttt{nn\_32}, which is largely insensitive to $\alpha$.
+Figure~\ref{fig:sizealpha} shows how KL divergence grows with network size at $r=2$. Because KL divergence is summed over nodes, every estimator's error grows with $n$, but MLE's grows fastest: from 1.35 to 38.0 nats as networks grow from 10 to 50 nodes, against 0.26 to 5.30 for \texttt{nn\_32}, so the ratio between them grows from 5.2 to 7.2. The matched-prior Dirichlet reference grows from 0.11 to 2.72 nats, about half of \texttt{nn\_32}'s error (0.43 to 0.51 times) at every size.
 
 \begin{figure}[pos=tbp]
 \centering
@@ -280,15 +287,17 @@ Figure~\ref{fig:sizealpha} shows KL divergence over different ground-truth distr
 \caption{Mean KL divergence by network size ($r=2$, $\alpha=0.5$, mean over all in-degrees, sample sizes and DAGs; log-scaled y-axis).}\label{fig:sizealpha}
 \end{figure}
 
-In-degree, cardinality and sample size all act on the estimators through the number of rows per parent configuration, $\rho=N/r^k$ (Eq.~\ref{eq:rho}). Figure~\ref{fig:rho} plots the ratio of MLE's KL to \texttt{nn\_32}'s against $\rho$ for every $(k,N)$ setting at $r=2$, pooling across network sizes and DAGs. The advantage of the neural CPD falls steadily as $\rho$ increases, from over 6 times at $\rho\approx0.2$ to roughly 2 times at $\rho=350$, and the settings from different in-degrees join into a single decreasing trend. The neural CPD is most valuable exactly where data per configuration is scarcest.
+In-degree, cardinality and sample size all act on the estimators through the number of rows per parent configuration, $\rho=N/r^k$ (Eq.~\ref{eq:rho}). Figure~\ref{fig:rho} plots the ratio of each tabular estimator's KL divergence to that of \texttt{nn\_32} against $\rho$, with one line per in-degree joining its sample sizes and both cardinalities on the same axes. If $\rho$ captured all three factors, every line would fall on a single curve. Against MLE (panel a), the $r=2$ settings come close to this: the ratio falls from about 6--7 at $\rho\leq1$ to about 2 at $\rho=250$--$350$, although where the in-degrees overlap in $\rho$ the $k=8$ line sits above the $k=10$ line (7.2 against 6.0 near $\rho\approx1$). Cardinality is not fully absorbed. At the same $\rho$ the ratio is higher at $r=4$ (10.9 against 7.2 at $\rho=0.78$, and 7.3 against 5.4 at $\rho=12.5$), and below $\rho\approx1$ the $r=4$ ratio falls again, because when almost no configuration is observed both estimators stay close to their uninformed defaults. The advantage over MLE is therefore largest when roughly one training row is available per parent configuration, rather than growing without limit as data becomes scarcer.
 
-The $r=4$ experiments confirm that the same pattern holds at higher cardinality: \texttt{nn\_32} beats MLE in all 180 configurations tested, and the architecture ranking is also stable, with \texttt{nn\_32} within 3\% of the best tuned network at $k\geq6$.
+Against the Dirichlet estimator (panel b), the ratio is below 1 at every setting, from 0.41 to 0.62 at $r=2$ and from 0.43 to 0.83 at $r=4$: the smoothed CPT has lower KL divergence than \texttt{nn\_32} throughout. This is expected: as the matched-prior reference (Section~\ref{sec:method}), the Dirichlet estimator is the posterior mean of each ground-truth column and minimises expected KL divergence, so the ratio measures how far \texttt{nn\_32} remains from the best achievable estimate. The advantage does not come from knowing $\alpha$: the Laplace estimator (pseudocount 1), which does not use it, has on average 7\% higher KL divergence than the reference at $r=2$ and still beats \texttt{nn\_32} in all 500 $r=2$ configurations. \pending{Laplace estimator at $r=4$.} The gap is narrowest at the sparsest $r=4$ settings, where every estimator stays close to uniform, and widest for $\rho$ between about 1 and 20.
 
-\begin{figure}[pos=tbp]
+The $r=4$ experiments confirm that the same pattern holds at higher cardinality: \texttt{nn\_32} beats MLE in all 300 configurations tested, and the architecture ranking is also stable, with \texttt{nn\_32} within 3\% of the best tuned network at $k\geq6$.
+
+\begin{figure*}[pos=tbp]
 \centering
-\includegraphics[width=\columnwidth]{figs/rho_c2.png}
-\caption{Ratio of MLE's and the Dirichlet estimator's KL divergence to that of \texttt{nn\_32}, against rows per parent configuration $\rho = N/2^k$ ($r=2$, 20-node networks, mean over five DAGs; log-scaled axes). Values above 1 favour \texttt{nn\_32}.}\label{fig:rho}
-\end{figure}
+\includegraphics[width=\textwidth]{figs/rho.png}
+\caption{Ratio of (a) MLE's and (b) the Dirichlet estimator's KL divergence to that of \texttt{nn\_32}, against rows per parent configuration $\rho = N/r^k$. Each line joins the four sample sizes ($N\in\{200,600,1000,1400\}$) at one in-degree; open markers and solid lines are $r=2$, filled markers and dashed lines $r=4$. Each point is the mean per-DAG ratio over 15 DAGs (five each at 10, 20 and 30 nodes, $\alpha=0.5$; log-scaled axes). Values above 1 favour \texttt{nn\_32}.}\label{fig:rho}
+\end{figure*}
 
 The same advantage can be expressed as data efficiency. Table~\ref{tab:isokl} shows the training rows needed for each estimator to reach a KL divergence of 5.0~nats, interpolated from the mean KL at each sample size ($r=2$). At $k=4$, MLE needs 458 rows against fewer than 200 for \texttt{nn\_32}. At $k\geq8$, MLE and the linear softmax cannot reach this threshold at any sample size in the grid, whereas \texttt{nn\_32} reaches it at 462 rows ($k=8$) and 918 rows ($k=10$).
 
@@ -339,27 +348,40 @@ L3 & Low & 12 & 55 & 9\,016\,841 & 309 \\
 
 \subsubsection{Predictive Performance}
 
-The real-data experiments used MLE, a Dirichlet estimator (pseudocount 0.5), the linear softmax, \texttt{nn\_32}, and \texttt{nn\_128\_64}, evaluated by three-fold cross-validation across all nine combinations of discretisation (L1, L2, L3) and DAG confidence (high, moderate, low).
+The real-data experiments compare MLE, the Dirichlet estimator, \texttt{nn\_32} and \texttt{nn\_128\_64}, each with its hyperparameter selected per fold as described in Section~\ref{sec:realdata}, together with the untuned linear softmax, by three-fold cross-validation across all nine combinations of discretisation (L1, L2, L3) and DAG confidence (high, moderate, low).
 
-Figure~\ref{fig:realmean} shows held-out log-likelihood averaged over all settings. Plain MLE is far below every other estimator at small $N$, because unseen child states receive near-zero probability. All three neural architectures outperform the Dirichlet estimator at every sample size, and perform nearly identically to one another.
+Figure~\ref{fig:realmean} shows held-out log-likelihood averaged over all settings. Plain MLE is far below every other estimator at small $N$, because unseen child states receive near-zero probability. Both tuned networks outperform the tuned Dirichlet estimator in every one of the 108 combinations of discretisation, DAG, $N$ and fold (smallest margin 0.004 nats per row), and the untuned linear softmax does so in 105 of the 108. The three networks perform almost identically: on average \texttt{nn\_32} is 0.004 nats per row better than the linear softmax and 0.019 better than \texttt{nn\_128\_64}. Table~\ref{tab:realgain} gives the gain of \texttt{nn\_32} over the Dirichlet estimator for each discretisation and sample size. It is largest at fine discretisation and small $N$, and small at $N=50\,000$, falling to 0.005 nats per row for L1 with the high-confidence graph.
+
+\begin{table}[tbp]
+\caption{Gain in held-out log-likelihood of \texttt{nn\_32} over the tuned Dirichlet estimator (nats per row; mean $\pm$ s.e.\ of the paired differences over three DAG confidence levels and three folds). Every one of the 108 underlying differences is positive.}\label{tab:realgain}
+\begin{tabular*}{\tblwidth}{@{\extracolsep{\fill}}lrrrr@{}}
+\toprule
+ & $N=500$ & 2\,000 & 10\,000 & 50\,000 \\
+\midrule
+L1 & $0.35\pm0.04$ & $0.20\pm0.03$ & $0.08\pm0.02$ & $0.03\pm0.01$ \\
+L2 & $0.84\pm0.05$ & $0.56\pm0.05$ & $0.31\pm0.05$ & $0.14\pm0.03$ \\
+L3 & $1.03\pm0.06$ & $0.71\pm0.05$ & $0.43\pm0.05$ & $0.21\pm0.04$ \\
+\bottomrule
+\end{tabular*}
+\end{table}
 
 \begin{figure}[pos=tbp]
 \centering
 \includegraphics[width=\columnwidth]{figs/real_mean.png}
-\caption{Held-out log-likelihood per row, mean over all nine settings and three folds (higher is better; log-scaled x-axis).}\label{fig:realmean}
+\caption{Held-out log-likelihood per row, mean over all nine settings and three folds, for each fold's tuned configurations; the linear softmax is untuned (higher is better; log-scaled x-axis).}\label{fig:realmean}
 \end{figure}
 
-Figure~\ref{fig:real} breaks this down across all nine discretisation and DAG combinations. MLE is excluded to keep the y-axis range informative. The rows correspond to discretisation levels (L1, L2, L3) and columns to DAG confidence (high, moderate, low). Moving down (finer discretisation) or right (denser graph) increases the number of parent configurations and widens the gap between the neural estimators and the Dirichlet baseline. At the extremes (L3 with the low-confidence graph), the Dirichlet estimator's log-likelihood is 0.6~nats per row worse than the neural estimators at $N=500$.
+Figure~\ref{fig:real} breaks this down across all nine discretisation and DAG combinations. MLE values below the plotted range are marked on the lower edge of each panel, to keep the y-axis range informative. The rows correspond to discretisation levels (L1, L2, L3) and columns to DAG confidence (high, moderate, low). Moving down (finer discretisation) or right (denser graph) increases the number of parent configurations and widens the gap between the neural estimators and the Dirichlet baseline. At the extremes (L3 with the low-confidence graph), the tuned Dirichlet estimator's log-likelihood is about 1.15~nats per row worse than the neural estimators at $N=500$ (1.11 to 1.16, depending on the network).
 
 \begin{figure*}[pos=tbp]
 \centering
 \includegraphics[width=\textwidth]{figs/real_loglik.png}
-\caption{Held-out log-likelihood per row for each discretisation (rows) and DAG confidence (columns), excluding MLE (mean $\pm$ s.d.\ over three folds; log-scaled x-axis).}\label{fig:real}
+\caption{Held-out log-likelihood per row for each discretisation (rows) and DAG confidence (columns), for each fold's tuned configurations, with the linear softmax untuned (mean $\pm$ s.d.\ over three folds; log-scaled x-axis). MLE values below the axis are shown as open triangles on its lower edge.}\label{fig:real}
 \end{figure*}
 
 Unlike the synthetic experiments, the linear softmax is competitive with \texttt{nn\_32} and \texttt{nn\_128\_64} on real data. Survey variables such as age, income and body mass index are ordinal and act on outcomes in largely monotone ways that an additive model can capture, whereas the synthetic ground-truth CPT columns were drawn independently.
 
-The gap between the tabular and neural estimators follows from data coverage. Supplementary Figure~S4 shows the fraction of test parent configurations unseen in training; it rises sharply with finer discretisation and denser graphs, explaining why MLE and the Dirichlet estimator fall behind at small $N$.
+The gap between the tabular and neural estimators follows from data coverage. Supplementary Figure~S4 shows the fraction of test rows in which at least one node's parent configuration never occurs in training; it rises sharply with finer discretisation and denser graphs, explaining why MLE and the Dirichlet estimator fall behind at small $N$.
 
 \subsubsection{Parameter and Training Cost}
 
@@ -376,7 +398,7 @@ The smaller parameter count does not make the neural estimators cheaper to fit. 
 \begin{figure*}[pos=tbp]
 \centering
 \includegraphics[width=\textwidth]{figs/real_timing.png}
-\caption{Fit time on the real dataset from a serial run on one fold, for three discretisation and DAG settings spanning the size of the tabular CPTs (log-scaled axes).}\label{fig:timing}
+\caption{Fit time on the real dataset from a serial run on one fold, for three discretisation and DAG settings spanning the size of the tabular CPTs (log-scaled axes). The networks are timed with their learning rate before tuning ($6\times10^{-4}$) and the same batch-size rule; the Dirichlet estimator with pseudocount 0.5.}\label{fig:timing}
 \end{figure*}
 
 % ===========================================================================
@@ -390,7 +412,7 @@ This report addressed that limitation by replacing traditional conditional proba
 
 \subsection{Limitations}
 
-The synthetic networks use cardinalities of 2 and 4 with a fixed in-degree per node and independently drawn Dirichlet CPTs; they do not reproduce the noise, correlation structure or class imbalance of clinical data, which the real-data experiment addresses only in part. The tuned networks were run on a subset of it, and hyperparameters were tuned separately for each cardinality at $n=20$ and $\alpha=0.5$. Continuous variables must be discretised, which loses information. Finally, a neural CPD is less directly readable than a CPT: the graph remains interpretable, but each local distribution has to be queried rather than read off a table.
+The synthetic networks use cardinalities of 2 and 4 with a fixed in-degree per node and independently drawn Dirichlet CPTs; they do not reproduce the noise, correlation structure or class imbalance of clinical data, which the real-data experiment addresses only in part. Hyperparameters were tuned separately for each cardinality at $n=20$ and $\alpha=0.5$. Continuous variables must be discretised, which loses information. Finally, a neural CPD is less directly readable than a CPT: the graph remains interpretable, but each local distribution has to be queried rather than read off a table.
 
 \subsection{Future Work}
 

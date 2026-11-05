@@ -1037,14 +1037,14 @@ SINGLE_W, DOUBLE_W = 3.4, 7.0      # column and page widths (inches)
 REPORT_ALIASES = {"nn_32_relu": "nn_32", "01_256x128_lr3e-4": "nn_256_128",
                   "k6_128_64_9": "nn_128_64", "dirichlet_0.5": "dirichlet"}
 # per estimator: colour, marker + line style, label (same across every figure)
-REPORT_COLORS = {"mle": "#222222", "dirichlet": "#7c3aed", "nn_linear": "#d97706",
+REPORT_COLORS = {"mle": "#222222", "dirichlet": "#7c3aed", "laplace": "#0d9488", "nn_linear": "#d97706",
                  "nn_32": "#2563eb", "nn_256_128": "#16a34a", "nn_128_64": "#e11d48",
                  "nn_256": "#0891b2", "nn_128": "#be185d", "nn_64_32": "#4d7c0f",
                  "nn_64": "#a16207", "nn_32_16": "#475569"}
-REPORT_FMT    = {"mle": "o-", "dirichlet": "D:", "nn_linear": "s--", "nn_32": "^-.",
+REPORT_FMT    = {"mle": "o-", "dirichlet": "D:", "laplace": "p:", "nn_linear": "s--", "nn_32": "^-.",
                  "nn_256_128": "P-", "nn_128_64": "*--",
                  "nn_256": "X-", "nn_128": "v:", "nn_64_32": "h-.", "nn_64": "<--", "nn_32_16": ">:"}
-REPORT_LABELS = {"mle": "MLE", "dirichlet": "Dirichlet"}
+REPORT_LABELS = {"mle": "MLE", "dirichlet": "Dirichlet", "laplace": "Laplace"}
 
 
 def _canon(name):
@@ -1250,53 +1250,63 @@ def plot_size_alpha(df, estimators, out_path=None):
         return _save(fig, out_path)
 
 
-def plot_ratio_vs_rho(df, baseline="mle", estimator="nn_32_relu", n_nodes=20, alpha=0.5, out_path=None):
-    """KL(baseline) / KL(estimator) vs rows per parent configuration rho = N / r^k,
-    one marker per in-degree. baseline may be a list (e.g. ["mle", "dirichlet"]):
-    one series per baseline in its own colour, on a log y-axis so ratios above
-    and below 1 read alike. Returns (fig, table of the plotted points)."""
-    baselines = [baseline] if isinstance(baseline, str) else list(baseline)
-    w = (_with_card(df[(df.n_nodes == n_nodes) & (df.alpha == alpha)])
-         .pivot_table(index=["in_degree", "sample_size", "card", "dag_idx"], columns="estimator", values="kl")
+def plot_ratio_vs_rho(df, baselines=("mle", "dirichlet"), estimator="nn_32", n_nodes=None, alpha=0.5,
+                      out_path=None):
+    """KL(baseline) / KL(estimator) vs rows per parent configuration rho = N / r^k:
+    one panel per baseline, one line per in-degree k joining its sample sizes,
+    every cardinality in df on the same axes (r=2 solid with open markers, r=4
+    dashed with filled ones). If rho captured in-degree, cardinality and N
+    completely, all lines would fall on one curve; the gaps between lines are
+    what it misses. Each point is the mean of the per-DAG ratios, pooled over the
+    network sizes in n_nodes (None = every size run at all of df's cardinalities;
+    rho is per node and the ratio cancels network size, so pooling is fair).
+    Returns (fig, table of the plotted points)."""
+    from matplotlib.lines import Line2D
+    baselines = [baselines] if isinstance(baselines, str) else list(baselines)
+    df = _with_card(df[df.alpha == alpha])
+    if n_nodes is None:
+        n_nodes = sorted(set.intersection(*(set(s.n_nodes) for _, s in df.groupby("card"))))
+    n_nodes = [n_nodes] if np.isscalar(n_nodes) else list(n_nodes)
+    w = (df[df.n_nodes.isin(n_nodes)]
+         .pivot_table(index=["card", "in_degree", "sample_size", "n_nodes", "dag_idx"], columns="estimator",
+                      values="kl")
          .reset_index())
     w["rho"] = w.sample_size / w.card ** w.in_degree
     for b in baselines:
         w[f"ratio_{b}"] = w[b] / w[estimator]
-    g = (w.groupby(["in_degree", "sample_size"])
-         .agg(rho=("rho", "first"), **{f"ratio_{b}": (f"ratio_{b}", "mean") for b in baselines})
-         .reset_index().sort_values("rho"))
-    if len(baselines) == 1:
-        g = g.rename(columns={f"ratio_{baselines[0]}": "ratio"})
+    g = (w.groupby(["card", "in_degree", "sample_size"])
+         .agg(rho=("rho", "first"), n_dags=("rho", "size"),
+              **{f"ratio_{b}": (f"ratio_{b}", "mean") for b in baselines})
+         .reset_index().sort_values(["card", "in_degree", "sample_size"]))
+    ks, cards = sorted(g.in_degree.unique()), sorted(g.card.unique())
+    k_style = {k: (_PALETTE[i % len(_PALETTE)], mk) for i, ((mk, _), k) in enumerate(zip(_styles(len(ks)), ks))}
+    r_style = {r: (ls, filled) for r, ls, filled in zip(cards, ["-", "--", ":", "-."], [False, True, True, True])}
     lab = _est_style(estimator)[2]
-    ks = sorted(g.in_degree.unique())
     with plt.rc_context(REPORT_RC):
-        fig, ax = plt.subplots(figsize=(SINGLE_W, 1.9 if len(baselines) == 1 else 2.3))
-        for b in baselines:
-            col = "ratio" if len(baselines) == 1 else f"ratio_{b}"
-            c = _est_style(estimator)[0] if len(baselines) == 1 else _est_style(b)[0]
-            ax.plot(g.rho, g[col], "-", color=c, lw=.7, alpha=.5)
-            for (mk, _), k in zip(_styles(len(ks)), ks):
-                s = g[g.in_degree == k]
-                ax.plot(s.rho, s[col], mk, color=c, mfc="white", ms=4.5,
-                        label=f"$k={k}$" if len(baselines) == 1 else None)
-        ax.axhline(1, color="#999", lw=.6, ls=":"); ax.set_xscale("log")
-        ax.set_xlabel(r"Rows per parent configuration $\rho = N/r^{k}$")
-        if len(baselines) == 1:
-            ax.set_ylim(0, None)
-            ax.set_ylabel(f"KL({_est_style(baselines[0])[2]}) / KL({lab})"); ax.legend(frameon=False)
-        else:
-            from matplotlib.lines import Line2D
-            ax.set_yscale("log"); ax.set_ylabel(f"KL ratio to {lab}")
+        fig, axs = plt.subplots(1, len(baselines), figsize=(DOUBLE_W, 2.2), squeeze=False)
+        for ax, b, t in zip(axs[0], baselines, "abcdefgh"):
+            for r in cards:
+                ls, filled = r_style[r]
+                for k in ks:
+                    s = g[(g.card == r) & (g.in_degree == k)]
+                    if s.empty:
+                        continue
+                    c, mk = k_style[k]
+                    ax.plot(s.rho, s[f"ratio_{b}"], ls=ls, marker=mk, color=c, lw=.9, ms=4,
+                            mfc=c if filled else "white")
+            ax.axhline(1, color="#999", lw=.6, ls=":")
+            ax.set_xscale("log"); ax.set_yscale("log")
             ax.yaxis.set_major_locator(plt.FixedLocator([0.25, 0.5, 1, 2, 4, 8, 16]))
             ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:g}"))
             ax.yaxis.set_minor_formatter(plt.NullFormatter())
-            # legend: one coloured line per ratio, then the in-degree markers in grey
-            handles = [Line2D([], [], color=_est_style(b)[0], lw=1.2,
-                              label=f"KL({_est_style(b)[2]}) / KL({lab})") for b in baselines]
-            handles += [Line2D([], [], ls="", marker=mk, color="#555", mfc="white", ms=4.5, label=f"$k={k}$")
-                        for (mk, _), k in zip(_styles(len(ks)), ks)]
-            fig.legend(handles=handles, loc="upper center", ncol=len(baselines), frameon=False,
-                       bbox_to_anchor=(.5, 1.0 + 0.05 * len(handles) / len(baselines)))
+            ax.set_xlabel(r"Rows per parent configuration $\rho = N/r^{k}$")
+            ax.set_ylabel(f"KL({_est_style(b)[2]}) / KL({lab})")
+            ax.set_title(f"({t}) {_est_style(b)[2]} relative to {lab}", loc="left")
+        handles = [Line2D([], [], color=k_style[k][0], marker=k_style[k][1], lw=.9, ms=4, label=f"$k={k}$")
+                   for k in ks]
+        handles += [Line2D([], [], color="#555", ls=r_style[r][0], marker="o", lw=.9, ms=4,
+                           mfc="#555" if r_style[r][1] else "white", label=f"$r={r}$") for r in cards]
+        fig.legend(handles=handles, loc="upper center", ncol=len(handles), frameon=False, bbox_to_anchor=(.5, 1.08))
         return _save(fig, out_path), g
 
 
