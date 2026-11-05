@@ -1108,17 +1108,23 @@ def plot_mle_fails(df, estimator="mle", sample_size=1000, alpha=0.5,
 def plot_no_es(hist_dir, archs=("nn_32", "nn_64_32", "nn_128_64"), k=10, n=600, card=None, out_path=None):
     """Training and validation loss without early stopping, mean over the DAGs
     whose histories are in hist_dir (hist_{arch}_c{card}_k{k}_d*_n{n}.npz, or
-    hist_{arch}_k{k}_d*_n{n}.npz from before card was in the name)."""
+    hist_{arch}_k{k}_d*_n{n}.npz from before card was in the name).
+    Nothing is drawn or saved unless every architecture has histories, so a
+    missing run never overwrites a saved figure with empty panels."""
     from glob import glob
     import os
+    files_by_arch = {arch: sorted(glob(os.path.join(hist_dir, f"hist_{arch}_c{card or '*'}_k{k}_d*_n{n}.npz"))
+                                  + glob(os.path.join(hist_dir, f"hist_{arch}_k{k}_d*_n{n}.npz")))
+                     for arch in archs}
+    missing = [a for a, f in files_by_arch.items() if not f]
+    if missing:
+        print(f"no histories for {missing} in {hist_dir}: run the no-early-stopping diagnostic first "
+              "(figure not made)")
+        return None
     with plt.rc_context(REPORT_RC):
         fig, axs = plt.subplots(1, len(archs), figsize=(DOUBLE_W, 1.75), sharey=True, squeeze=False)
         for ax, arch in zip(axs[0], archs):
-            files = sorted(glob(os.path.join(hist_dir, f"hist_{arch}_c{card or '*'}_k{k}_d*_n{n}.npz"))
-                           + glob(os.path.join(hist_dir, f"hist_{arch}_k{k}_d*_n{n}.npz")))
-            if not files:
-                print(f"WARNING: no histories for {arch} in {hist_dir}")
-                continue
+            files = files_by_arch[arch]
             tr = np.mean([np.load(f)["train"].sum(0) for f in files], 0)
             va = np.mean([np.load(f)["val"].sum(0) for f in files], 0)
             ep = np.arange(1, len(tr) + 1)
@@ -1324,4 +1330,55 @@ def plot_real_unseen(res, disc_levels, dag_levels, estimator="mle", out_path=Non
         order = [i * len(dag_levels) + j for j in range(len(dag_levels)) for i in range(len(disc_levels))]
         fig.legend([h[i] for i in order], [l[i] for i in order], loc="lower center",
                    ncol=len(dag_levels), frameon=False, bbox_to_anchor=(.5, 1.0))
+        return _save(fig, out_path)
+
+
+def _tabular_params(res, tabular=("mle", "dirichlet")):
+    """Free parameters of the tabular CPTs per (disc_level, dag_level)."""
+    t = res[res.estimator.isin(tabular)]
+    return t.groupby(["disc_level", "dag_level"])["free_params"].max()
+
+
+def plot_real_params(res, estimators, out_path=None):
+    """Free parameters of each estimator against the size of the tabular CPTs,
+    one point per (discretisation, DAG). The tabular estimators (MLE, Dirichlet)
+    have exactly the CPT's count, so they are the diagonal rather than points."""
+    tab = _tabular_params(res)
+    with plt.rc_context(REPORT_RC):
+        fig, ax = plt.subplots(figsize=(SINGLE_W, 2.4))
+        for i, e in enumerate(estimators):
+            p = (res[res.estimator == e].groupby(["disc_level", "dag_level"])["free_params"].median()
+                 .rename("params").to_frame().join(tab.rename("tabular")).sort_values("tabular"))
+            if np.allclose(p["params"], p["tabular"]):
+                continue
+            c, fmt, lab = _est_style(e, i)
+            # markers only: the settings are separate points, not a series
+            ax.plot(p["tabular"], p["params"], fmt.rstrip("-.:"), color=c, label=lab, ls="none")
+        lo, hi = tab.min() / 1.5, tab.max() * 1.5
+        ax.plot([lo, hi], [lo, hi], ":", color=REPORT_COLORS["mle"], lw=1, label="CPT (MLE, Dirichlet)")
+        ax.set_xscale("log"); ax.set_yscale("log")
+        ax.set_xlabel("Free parameters of the tabular CPTs"); ax.set_ylabel("Free parameters")
+        _legend_top(fig, ax, 3, 1.13)
+        return _save(fig, out_path)
+
+
+def plot_real_timing(timing, estimators, panels, out_path=None):
+    """Serial fit time against N, one panel per (discretisation, DAG), one line
+    per estimator. timing: rows of the serial timing run."""
+    tab = _tabular_params(timing)
+    with plt.rc_context(REPORT_RC):
+        fig, axs = plt.subplots(1, len(panels), figsize=(DOUBLE_W, 1.9), sharey=True, squeeze=False)
+        for ax, (dl, gl) in zip(axs[0], panels):
+            sub = timing[(timing.disc_level == dl) & (timing.dag_level == gl)]
+            for i, e in enumerate(estimators):
+                c, fmt, lab = _est_style(e, i)
+                q = sub[sub.estimator == e].groupby("sample_size").fit_time_s.mean()
+                ax.plot(q.index, q, fmt, color=c, label=lab)
+            ns = sorted(sub.sample_size.unique())
+            ax.set_xscale("log"); ax.set_yscale("log")
+            ax.set_xticks(ns); ax.set_xticklabels([_n_label(n) for n in ns]); ax.minorticks_off()
+            ax.set_xlabel("Training rows $N$")
+            ax.set_title(f"{dl}, {gl} ({tab.get((dl, gl), float('nan')):,.0f} tabular params)", loc="left")
+        axs[0, 0].set_ylabel("Fit time (s, serial)")
+        _legend_top(fig, axs[0, 0], len(estimators), 1.1)
         return _save(fig, out_path)
