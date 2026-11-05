@@ -5,6 +5,11 @@ Reviewed: `report/main.tex` and `report/main.pdf` (compiled 2026-11-05), `ndbn/`
 `results-tuning/*`. I re-computed every number I could trace to a saved result. I also re-fitted MLE and
 Dirichlet estimators on the cached synthetic data (script: see "Verification run" below).
 
+**Re-checked 2026-11-05 against the merged results (commit `b5d608b`).** This covers the full synthetic grid for
+every estimator, including `dirichlet` (800 configurations: 500 at r=2, 300 at r=4), and the new real-data
+`tuning.csv`, `selection.csv` and `results_tuned.csv`. `report/main.tex` and `main.pdf` are unchanged, so every
+report-text issue below still stands. Items fixed by the new runs are marked ✅.
+
 Legend: **[P0]** must fix before submission (correctness / validity) · **[P1]** should fix (clarity, consistency,
 reviewer objections) · **[P2]** nice to have.
 
@@ -25,8 +30,10 @@ reviewer objections) · **[P2]** nice to have.
   **77.4 nats of that come from floored zeros.** On the same data, Dirichlet(0.5) gets 9.8 and nn_32 gets 13.2.
 * So "reducing divergence by over 8-fold", "nn_32 beats MLE in 98.8 % of configurations", Table 4 (iso-KL)
   and Figure 5 (ρ ratio) mostly measure **how MLE handles zero cells**, not the value of neural CPDs.
-* The text still says the Dirichlet estimator "is included alongside MLE in the synthetic failure analysis"
-  (§3.4.1). It is not in `results.csv`, and §4.1 has a red `[PENDING: …]` marker in the compiled PDF.
+* ✅ Dirichlet is now in `results.csv`. Your rows match my independent re-fit to 1e-15 on all 680 overlapping
+  configurations. **It confirms the point above.** Dirichlet(0.5) beats nn_32 in **800 / 800** configurations.
+  It beats the best of all tuned networks in 798 / 800: the exceptions are 2 r=2 cells, and r=4 has none.
+  The report text does not use these results yet, and §4.1 still has the red `[PENDING: …]` marker.
 
 See §5 for the Dirichlet numbers on the full grid and how to reframe this.
 
@@ -40,8 +47,10 @@ These numbers come from the **old** main experiment (`backup/results5-old-main-e
 |---|---|---|
 | "networks grow from 5 to 40 nodes, MLE 0.05→15.7 vs nn_32 0.02→1.85, ratio 2.8→8.5" | old exp. | n=10→50: MLE 1.35→38.0, nn_32 0.26→5.30, ratio 5.2→7.2 |
 | "α=0.1 … 1.9×; α=1 … 12×, nn_32 insensitive to α" | old exp. | no α≠0.5 runs exist |
-| "nn_32 averages 1.95× the KL of the best tuned" (§4.2) | not traceable | **1.19×** (r=2, 220 shared configs) |
-| "nn_32 … mean 202 s vs >900 s per network" (§3.5, §4.2) | wrong direction | nn_32 202 s; tuned nets **53–77 s** (r=2) |
+| "nn_32 averages 1.95× the KL of the best tuned" (§4.2) | not traceable | **1.17×** (r=2, 500 configs); 1.075× (r=4, 300) |
+| "nn_32 within 3 % of best at k≥6, within 30 % at k=2" (r=4) | ✓ still holds | 2–3 % at k≥6, 19.5 % at k=2 (the full grid now includes k=10) |
+| "nn_32 … mean 202 s vs >900 s per network" (§3.5, §4.2) | wrong direction | nn_32 202 s; tuned nets **61–92 s** (r=2). At r=4: nn_32 67 s, nn_256 20 s. All parallel wall-clock |
+| "nn_256 and nn_128_64 alternate as best" | roughly ✓ | best-of counts r=2: nn_256 231, nn_128_64 97, nn_64_32 58, nn_256_128 57, nn_128 42, nn_64 15; r=4: nn_128_64 132, nn_256 114, nn_64_32 45, nn_32_16 9 |
 | "in 40-node networks KL rises from 0.28" (§4.1) | — | 0.18 (n=40, N=1000, k=2) |
 | "Dirichlet … 0.6 nats per row worse … L3/low, N=500" (§4.4.2) | — | **1.15–1.20 nats** |
 | "MLE and Dirichlet fit in under a minute at every N" (§4.4.3) | contradicted | Dirichlet **147–164 s** at L3/low (serial timing) |
@@ -58,9 +67,10 @@ Figure 4(b) (`size_alpha_c2.png`) now shows **a single point** at α = 0.5, so p
 | Table 2 lists 7 estimators | results also contain `nn_128`, `nn_64`, `nn_256_128`, `nn_64_32` (r=2) and `nn_32_16` (r=4), all plotted in Fig 2 |
 | Max epochs not stated | 1000 for tuned/selected nets; 500 (`NN_HPARAMS`) for `nn_linear` |
 | §3.5: sweep trials "scored by mean KL" | nb 2 sets `HP_METRIC = "mean_val_loss"`, and the candidate lists are labelled "chosen by kl" vs "small by val loss". State which one picked each final config |
-| Table 1 / text: "900 configurations per estimator" | 500 (r=2) + 180 (r=4) = 680 for mle/nn_linear/nn_32; 220 + 180 for tuned nets. The caption and text disagree |
+| Table 1 / text: "900 configurations per estimator"; † marks for the r=4 subset; Limitations: "tuned networks were run on a subset" | **Now 800 per estimator**: r=2 is n 10–50 × k 2–10 × N 200–1400 × 5 DAGs = 500; r=4 is n 10–30 × k 2–10 × N 200–1400 × 5 = 300. Every estimator ran on the full grid. Update Table 1 (r=4 now includes k=10 and N=200), the counts, and remove the "subset" limitation |
 | §3.7: training time "recorded separately in a serial run" | true for real data only. No synthetic serial timing file exists, so every synthetic time quoted is a **parallel** wall-clock (`n_jobs = -1`) and the rows come from three code versions |
 | §3.6 real-data NNs | They use the **r=4 synthetic configs** (`chosen_nn_c4.json`) plus an N-dependent batch-size rule (`real_data.at_n`). The `*_fixedbatch` control runs are not mentioned |
+| §3.6 real-data tuning (new) | `tuning.csv` / `selection.csv` show per-fold selection on validation log-lik: pseudocount ∈ {0.1, 0.5, 1.0} and NN lr ∈ {3e-4, 1e-3, 3e-3}, one choice per fold for all 36 cells. **Both winners are at the edge of their grid** (pseudocount 1.0, lr 3e-3), and the Dirichlet validation score improves monotonically 0.1 → 0.5 → 1.0. The report says neither that this tuning happened nor which results (`results_c4` or `results_tuned`) the figures use |
 | Unseen rate: "fraction of test parent configurations never observed" | `unseen_config_rate` gives the fraction of **test rows** with ≥1 node whose parent configuration is unseen. That is a different quantity |
 
 ### 1.4 [P0] The compiled PDF is out of sync with the source and with the results
@@ -68,7 +78,37 @@ Figure 4(b) (`size_alpha_c2.png`) now shows **a single point** at α = 0.5, so p
 * `report/main.tex` includes `figs/*.pdf`. Those files were deleted from `figs/` and the root `main.tex` was
   deleted. The PDF was built (in Prism) from the **old** PDFs (`old-figs/`). Example: PDF Fig 2 is r=2 only
   with x = in-degree, but the caption says r ∈ {2,4} and the text says the x-axis is rᵏ.
-* `references.bib` is **not in the repository**, so the report cannot be rebuilt from the repo.
+* ✅ `report/references.bib` has been added; all 16 cited keys resolve. It also holds 15 uncited entries (XAI in
+  medicine, InterpretML, Rudin-adjacent work). These are a ready-made start on the missing
+  "interpretable prediction" related-work subsection.
+* **`main_old.tex` is the newer draft, not `report/main.tex`.** `report/main.tex` is the 30 Oct committed
+  `main.tex` (`6f7f3d9`) plus two small 5 Nov edits: the `\texorpdfstring` author fix, and removal of the
+  `\provisional` "smoothed tabular estimator not included" sentence. `main_old.tex` (saved 31 Oct 00:42) adds
+  later edits on top of `6f7f3d9`:
+  * paths to the current `figs/*_c2.png` / `real_*.png` files;
+  * section-level citations, such as `\citep[Sec.~17.2]{…}`;
+  * an accurate real-data timing paragraph that matches `results_timing.csv`;
+  * the `real_params` / `real_timing` captions that match the actual figures.
+  The `report/main.pdf` red-flag numbers in §1.2 ("under a minute", for example) come from using the older file.
+  ✅ **Done:** `report/main.tex` is now `main_old.tex` with the two 5 Nov edits re-applied. I also added
+  `\graphicspath{{./}{../}}` so it compiles from `report/`, and updated the captions of the three figures that
+  changed (`mle_fails`, `size_alpha` now single-column, `rho`). `main_old.tex` is removed; it remains in git
+  history. Not compiled here (no TeX install). The body text still has every §1–2 issue.
+* ✅ **Report figures now all come from the notebooks, into `figs/`.** The merge "keep local notebooks"
+  (`b5d608b`) had discarded the report-figure cells from notebooks 2–4. These are now restored:
+  * nb 3: the five synthetic figures;
+  * nb 4: `real_timing`, `real_params`, and `real_loglik/mean/unseen`, which now write to `figs/`;
+  * nb 2: `no_es.png` and `sweep_c2/c4.png`.
+  The real-data figures regenerate byte-identical to the committed ones. Remaining gaps:
+  * **S1 (`no_es`)** draws nothing until the no-early-stopping run exists on tuning DAGs
+    (`results-tuning/histories_no_es_tune` is missing).
+  * **S2:** the old `figs/sweep.png` was identical to `sweep_c4.png`, the r=4 *small-network* sweep (32, 64,
+    16-16, 32-16). That contradicts §3.5 "256-unit and two-layer networks dominated the sweeps at both
+    cardinalities"; only the r=2 sweep (`sweep_c2.png`) shows those sizes.
+  * **S3:** nb 4 cell `2df90528` draws the three expert DAGs with graphviz, but only displays them; it never
+    saves them to `figs/`.
+  * `ndbn/settings.py` had `TUNING_DIR = "results5-parallel"`, a folder that does not exist. It is fixed to
+    `results-tuning` and adds `FIG_DIR = "figs"`.
 * Supplementary Figures S1–S4 are cited four times, but no supplement exists. S1 (`no_es`) still uses
   **evaluation** DAGs 1–5 from `backup/results4-old-sweep-seed`, which contradicts "All tuning was performed on
   a separate set of tuning DAGs" (§3.5).
@@ -117,7 +157,7 @@ neural or parametric CPDs other than an unpublished thesis.
 * [P1] §4.1 "share of parent configurations never seen rises from 0.5 % to 78 %". No saved result contains
   this, so add it to `results.csv` or remove it.
 * [P1] §4.2 "ranking among the MLPs does not change with sample size or in-degree". Best-architecture counts at
-  r=2 are nn_256 99, nn_128_64 50, nn_256_128 28, nn_64_32 23, nn_128 16, nn_64 4 (of 220), so the ranking
+  r=2 are nn_256 231, nn_128_64 97, nn_64_32 58, nn_256_128 57, nn_128 42, nn_64 15 (of 500), so the ranking
   does change. Soften this, or show per-cell rank agreement.
 * [P1] §4.2 "Parameter sharing alone is therefore not the mechanism; the hidden layer is". The linear softmax
   is a mis-specified additive model of CPTs that have full interactions. Its failure shows additivity is wrong
@@ -130,7 +170,19 @@ neural or parametric CPDs other than an unpublished thesis.
   This holds on the mean. At fold level, nn_32 and nn_128_64 win **108/108**, and nn_linear wins 105/108,
   losing at L1/high/N=50 000. Report it that way: it is a strong, clean result. Also report paired fold
   differences ± s.e.
-* [P1] Note that the real-data gains are large at N ≤ 2 000 and tiny at N = 50 000 (0.005–0.26 nats/row).
+  ✅ It also survives the new tuning. In `results_tuned.csv`, nn_32 and nn_128_64 still beat the tuned
+  Dirichlet (pseudocount 1.0) in **108/108** fold-level comparisons (smallest margin 0.004 nats/row). Mean
+  nn_32 − Dirichlet in nats/row:
+
+  | | N=500 | 2 000 | 10 000 | 50 000 |
+  |---|---|---|---|---|
+  | L1 | 0.35 | 0.20 | 0.08 | 0.03 |
+  | L2 | 0.84 | 0.56 | 0.31 | 0.14 |
+  | L3 | 1.03 | 0.71 | 0.43 | 0.21 |
+
+  Make this the headline real-data result. Say which results file each real-data figure uses: they currently
+  come from `results_c4.csv`, the untuned run.
+* [P1] Note that the real-data gains are large at small N and fine discretisation and small at N = 50 000 (see the table above).
 * [P1] The title says "Medical Diagnosis", but no diagnostic quantity is evaluated. Add P(Diabetes | other
   variables) via the Markov blanket, with AUROC, Brier score and log-loss on the test folds (see §6).
 * [P2] Fig 1 (`mle_fails_c2.png`) uses a much larger font than the other figures and a linear y-axis. Its
@@ -209,11 +261,12 @@ function of rows per configuration, on real clinical data with an expert DAG.
 
 | Pri | Issue | Fix |
 |---|---|---|
-| P0 | `config.py` is **untracked**, but every notebook does `from config import *`. A fresh clone fails on cell 1 | `git add config.py` |
-| P0 | `report/` (tex + pdf) is untracked, the root `main.tex` is deleted, and `references.bib` is missing everywhere | commit `report/main.tex`, `report/references.bib`, the class file (`cas-dc.cls`, `cas-common.sty`, `cas-model2-names.bst`) or a note on where to get them; point `\graphicspath{{../figs/}}` at the PNGs |
+| P0 | After the merge (`b5d608b`, "keep local notebooks…") there are **three settings modules**. `config.py` is committed but **no notebook imports it**. The notebooks import `ndbn/settings.py`, which has a different base grid (`ALPHAS = [0.1, 0.5]`, `IN_DEGREES = [2, 6, 10]`…). `ndbn/notebook_config.py` is marked deprecated. Notebook 1 is `1_setup_and_checks.ipynb` again, so the restructure in `a88a46e` was partly undone | pick one: either `config.py` or `ndbn/settings.py`. Delete the other two, and check that each notebook's settings cell reproduces the grid in `results.csv` |
+| P0 | ✅ `report/` is committed and `references.bib` is added (commit it). The class files are still not in the repo | commit the class file (`cas-dc.cls`, `cas-common.sty`, `cas-model2-names.bst`) or a note on where to get them; point `\graphicspath{{../figs/}}` at the PNGs |
 | P0 | No `requirements.txt` / `environment.yml`. The venv is Python 3.14.4, torch 2.14.0, pgmpy 1.1.2, numpy 2.5.3, pandas 3.0.5, networkx 3.6.1, scikit-learn 1.9.1, wandb 0.30.0, plus psutil, tqdm, joblib, ucimlrepo, matplotlib 3.11.2 | `pip freeze > requirements-lock.txt`, plus a short hand-written `requirements.txt` with pinned versions of the direct deps. pgmpy's estimator API changes between versions, so pin it exactly |
 | P0 | README is one line | see the template below |
-| P1 | Results come from three code versions (`3c0ff2d+dirty`, `98f2a70+dirty`, `ddd750e+dirty`), all with uncommitted changes, so no commit reproduces them | commit, tag `v-report`, re-run at least the main grid from the tag (see §6), and record the tag in the report |
+| P0 | **Part of `results.csv` does not reproduce with the current code and cache.** Mixed rows come from four code versions (`3c0ff2d`, `ddd750e`, `98f2a70`, `0df292c`, all `+dirty`). (a) 100 r=2 MLE rows (`3c0ff2d`, N=1000 slice, n≠20) differ from a re-fit on the cached data. (b) I re-fitted two cells in this checkout: nn_32 reproduced exactly in one cell (n=10, k=2) and was 1.4 % off in the other (n=20, k=4). nn_256 rows from `3c0ff2d` were 12 % and 29 % off. (c) The CSV records torch 2.14.1+cu130, but this venv has 2.14.0. So within a cell, estimators may not have seen identical data or code, and the "paired comparison" claim is not guaranteed | commit, tag `v-report`, and re-run every estimator from the tag in one environment (§6 item 7). Record the tag and the torch version in the report |
+| P1 | `results7-parallel/` (cached data) and `backup/` are now tracked in git | see the `backup/` row below | commit, tag `v-report`, re-run at least the main grid from the tag (see §6), and record the tag in the report |
 | P1 | Notebooks were run out of order: nb 3 execution counts are `[None,42,43,44,46,47,32,None,35,10]`, nb 4 is executed only up to cell 12, and nb 3's settings cell shows the r=4 run (`CARD = 4`, `VAL_FRAC = 0.3`), not the r=2 one | add the r=2 and r=4 settings as named presets (or a `CARD` loop). Restart-and-run-all each notebook once with `RUN_* = False` so the figures regenerate from the saved CSVs |
 | P1 | `backup/` (1 746 files, 324 MB) and `results6-real/` are tracked in git | remove from the index (`git rm -r --cached backup results6-real`), add to `.gitignore`, and archive elsewhere |
 | P1 | `.claude/settings.json` is tracked and holds machine-specific scratchpad paths | untrack it and add it to `.gitignore` |
@@ -229,10 +282,10 @@ function of rows per configuration, on real clinical data with an expert DAG.
 
 ```
 # Neural CPDs for discrete Bayesian networks (honours project)
-Report: report/main.pdf  |  Code: ndbn/  |  Config: config.py
+Report: report/main.pdf  |  Code: ndbn/  |  Settings: ndbn/settings.py (or config.py — keep one)
 ## Setup      python 3.14; pip install -r requirements.txt
 ## Reproduce  (all notebooks read saved CSVs unless RUN_* = True)
-1_setup.ipynb                  smoke tests, example DAG
+1_setup_and_checks.ipynb       smoke tests, example DAG
 2_hyperparameter_tuning.ipynb  sweeps → results-tuning/chosen_nn_c{2,4}.json   (~X h, W&B optional)
 3_main_experiments.ipynb       CARD=2 and CARD=4 → results-synthetic/results.csv (~X h on N cores)
 4_real_data.ipynb              → results-realdata/results_c4.csv, results_timing.csv (~X h)
@@ -245,56 +298,62 @@ Report: report/main.pdf  |  Code: ndbn/  |  Config: config.py
 
 ## 5. Verification run: Dirichlet on the synthetic grid
 
-This is an independent re-fit of MLE, Dirichlet(0.5) and Dirichlet(1.0) on the cached train/test CSVs in
-`results-synthetic/data` (680 configs: all 500 r=2 and all 180 r=4). It was compared with the NN rows of the
-`results.csv` that was present on 2026-11-05, before the latest runs were pulled.
+I re-fitted MLE, Dirichlet(0.5) and Dirichlet(1.0) independently on the cached train/test CSVs in
+`results-synthetic/data`, covering the 680 configs on the original grid. **Your `dirichlet` rows in the merged
+`results.csv` match my re-fit to 1e-15 on all 680.** The table uses your full 800-config results.
 
-**Dirichlet(0.5) beats nn_32 in 680 / 680 configurations.** It also beats the best tuned network in 219 / 220
-(r=2) and 180 / 180 (r=4). This is what theory predicts (§1.1).
+**Dirichlet(0.5) beats nn_32 in 800 / 800 configurations** and beats the best tuned network in 798 / 800.
+That is what theory predicts (§1.1).
 
-| r | k | MLE | Dir(0.5) | Dir(1.0) | nn_linear | nn_32 |
+| r | k | MLE | Dirichlet | nn_linear | nn_32 | best tuned (mean) |
 |---|---|---|---|---|---|---|
-| 2 | 2 | 0.61 | **0.11** | 0.12 | 1.85 | 0.20 |
-| 2 | 4 | 3.53 | **0.35** | 0.38 | 4.51 | 0.76 |
-| 2 | 6 | 13.74 | **0.94** | 1.03 | 6.15 | 2.24 |
-| 2 | 8 | 31.17 | **1.99** | 2.14 | 6.86 | 4.25 |
-| 2 | 10 | 38.74 | **3.02** | 3.17 | 7.03 | 5.36 |
-| 4 | 2 | 3.22 | **0.41** | 0.44 | 3.88 | 0.81 |
-| 4 | 4 | 52.33 | **2.65** | 2.89 | 7.58 | 5.49 |
-| 4 | 6 | 62.30 | **5.19** | 5.35 | 8.05 | 7.14 |
-| 4 | 8 | 38.79 | **6.06** | 6.16 | 8.20 | 7.34 |
+| 2 | 2 | 0.60 | **0.11** | 1.85 | 0.20 | 0.20 |
+| 2 | 4 | 3.52 | **0.35** | 4.51 | 0.76 | 0.70 |
+| 2 | 6 | 13.68 | **0.94** | 6.15 | 2.24 | 1.93 |
+| 2 | 8 | 31.20 | **1.99** | 6.86 | 4.25 | 3.74 |
+| 2 | 10 | 38.75 | **3.02** | 7.03 | 5.36 | 5.08 |
+| 4 | 2 | 7.58 | **0.66** | 4.39 | 1.31 | 1.18 |
+| 4 | 4 | 61.56 | **3.31** | 7.89 | 6.09 | 5.67 |
+| 4 | 6 | 59.53 | **5.58** | 8.32 | 7.40 | 7.28 |
+| 4 | 8 | 37.97 | **6.31** | 8.44 | 7.56 | 7.47 |
+| 4 | 10 | 30.38 | **6.58** | 8.46 | 7.63 | 7.54 |
 
-(Mean total KL in nats over network sizes, DAGs and N.) Dir(0.5)/nn_32 ranges from 0.37 to 0.67 across all
-(k, N) cells at r=2. **On average, 92 % (r=2) and 95 % (r=4) of MLE's KL comes from cells floored at 1e-12.**
-
-**Reproducibility side-finding.** My MLE re-fit matches `results.csv` exactly for 580 of the 680 rows. The 100
-rows that do not match are all r=2 MLE rows written by code version `3c0ff2d+dirty`, the N=1000 slice at
-n ≠ 20. So those MLE rows were fitted on data that differs from today's cache. The NN rows for the same cells
-come from other code versions, so check that every estimator in a cell actually saw the same data. A clean
-re-run from one tagged commit (§6 item 7) fixes this.
+(Mean total KL in nats over network sizes, DAGs and N. "Best tuned" is the architecture with the lowest mean
+at that k.) The Dirichlet/nn_32 ratio is 0.41–0.58 at r=2 and 0.50–0.80 at r=4, so the gap shrinks at high
+in-degree when r=4. In my re-fit, **on average 92 % (r=2) and 95 % (r=4) of MLE's KL comes from cells
+floored at 1e-12**. Even the report's own §4.1 example changes: at n=40, N=1000, Dirichlet goes from 0.07 to
+3.81 nats as k goes 2→10, against MLE's 0.18 to 57.9.
 
 **How to reframe.** On synthetic Dirichlet ground truth, a properly smoothed CPT is optimal, and neural CPDs
-cannot beat it. The NN's advantage over MLE is regularisation, not learned sharing. The real-data result
-(108/108 fold-level wins over Dirichlet(0.5)) is your genuine positive finding, because real CPDs *do* have
-shared structure. It still needs a tuned pseudocount to be convincing (§6 item 3). Item 2 in §6, a synthetic
-ground truth with shared structure, would let the synthetic study show this too.
+cannot beat it. The NN's advantage over MLE is regularisation, not learned sharing. One option is to present
+the synthetic study honestly as "NNs recover most of the gap from MLE to the Bayes-optimal estimator without
+knowing the prior". Then make the real data the main evidence: 108/108 wins over a validation-tuned Dirichlet.
+That is a genuine positive finding, because real CPDs *do* have shared structure. Item 2 in §6, a synthetic
+ground truth with shared structure, would let the synthetic study show the same thing under control.
 
 ---
 
 ## 6. Suggested runs (in priority order)
 
-1. **[P0] Dirichlet (and BDeu) on the full synthetic grid.** Add `{"name":"dirichlet","type":"dirichlet",
-   "pseudo_count":0.5}` to `BASELINES` in nb 3 and re-run both r=2 and r=4. This is cheap: tabular fits take
-   seconds. Use the results to rewrite §4.1–4.3 and the abstract (see §5).
+1. ✅ **Dirichlet on the full synthetic grid** is done and verified. What remains is to **rewrite §4.1–4.3, the
+   abstract, the intro claims and the conclusion** around it (see §5).
 2. **[P0] A synthetic family with shared structure** so the neural CPDs have something to share. Examples:
    ground-truth CPDs that are (a) logistic in the one-hot parents with a few pairwise interactions, (b) noisy-OR
    / noisy-MAX, (c) low-rank / tree-structured (context-specific). Under these, Dirichlet is no longer optimal,
    so a win for nn_32 over Dirichlet would be a real finding. Keep the same n/k/N grid (or the 20-node slice)
    and run mle, dirichlet, nn_linear and nn_32.
-3. **[P0] A tuned smoothed baseline on real data.** Choose the pseudocount (or BDeu ESS) from {0.01, 0.05, 0.1,
-   0.25, 0.5, 1, 2, 5} on the *same* 20 % validation split the NNs use, per (discretisation, DAG, N). This
-   removes the "unequal tuning budget" objection. Your 108/108 fold-level win will very likely survive at small
-   N. Report what happens at N = 50 000.
+3. **[P0, mostly done] A tuned smoothed baseline on real data.** ✅ The pseudocount is now chosen on validation,
+   and nn_32 still wins 108/108. **Remaining:** the winning pseudocount (1.0) and NN lr (3e-3) both sit at the
+   *edge* of their grids, and Dirichlet's validation score is still rising at 1.0 (−16.55 → −16.51 at N=500).
+   Extend the grids to pseudocount {1, 2, 5, 10} (or BDeu ESS) and lr {1e-2}. Tabular fits are cheap, so this
+   costs minutes. Expect the gap to shrink a little at L2/L3 and small N, but probably not to flip.
+   *Selection granularity:* one choice per fold, pooled over all 36 cells, was a deliberate choice and is
+   defensible. Justify it in §3.6 on variance grounds (at N=500 each cell's validation set is 100 rows) and on
+   prior grounds (a Dirichlet pseudocount encodes the prior, so its optimum should not depend on N; the NNs' N
+   dependence is handled by the pre-specified batch rule). Say also that both families get the identical
+   protocol. Do **not** argue that tabular estimators "cannot" be tuned per cell: they can, cheaply. To close
+   the objection, add an *oracle* check: the best pseudocount per cell chosen on the test fold, an upper bound
+   for any per-cell tuning. If nn_32 still beats that, per-cell selection cannot change the conclusion.
 4. **[P1] Diagnostic evaluation on real data.** For each fitted model, compute P(Diabetes | all other
    variables) on the test fold. Only the Markov blanket factors are needed: the diabetes CPD × its children's
    CPDs, normalised over the 2 states, so no general inference engine is required. Report AUROC, Brier and
@@ -304,8 +363,9 @@ ground truth with shared structure, would let the synthetic study show this too.
 6. **[P1] A serial timing run for the synthetic grid** (nb 3 already has the cell, writing
    `results_timing.csv`) on the 20-node slice for every estimator, so the §3.5/§4.2 time claims are measured.
 7. **[P1] A clean re-run from a tagged commit** of at least the r=2 main grid for mle/nn_linear/nn_32, to remove
-   the three-code-version mix. Check that the KLs reproduce: my MLE re-fit matched `results.csv` to 6 decimals,
-   so seeding works.
+   the four-code-version mix. This has become **P0**, since some rows do not reproduce (see §4). Seeding itself
+   works: Dirichlet and 580/680 MLE rows reproduce exactly, and so does nn_32 in one of the two cells I re-fitted.
+   Re-run on the same machine and torch version as the rest, and pin that version.
 8. **[P2] Sensitivity checks:** the validation fraction (20 % vs 30 %), because MLE/Dirichlet get the full N;
    the MLE floor ε ∈ {1e-12, 1e-6}, to show how much of MLE's KL is the floor; and α ∈ {0.1, 1} on the 20-node
    slice, if you want to keep the α discussion.
