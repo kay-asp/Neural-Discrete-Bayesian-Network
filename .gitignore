@@ -4,3 +4,6 @@ __pycache__/
 
 # W&B local run logs (everything is on the W&B server)
 wandb/
+
+# review notes (local only)
+report/REVIEW.md
