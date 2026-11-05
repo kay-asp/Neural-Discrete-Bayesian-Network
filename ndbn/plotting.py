@@ -1084,24 +1084,41 @@ def _with_card(df):
     return df.assign(card=df["card"].fillna(2) if "card" in df else 2)
 
 
-def plot_mle_fails(df, estimator="mle", sample_size=1000, alpha=0.5,
+def plot_mle_fails(df, estimators=("mle",), sample_size=1000, alpha=0.5,
                    ks=None, out_path=None):
-    """(a) KL and (b) CPT memory vs in-degree, one line per network size, stacked."""
-    m = df[(df.estimator == estimator) & (df.sample_size == sample_size) & (df.alpha == alpha)]
+    """KL vs in-degree for each tabular estimator, then CPT memory (the same for
+    all of them), one line per network size, stacked. With more than one
+    estimator the KL panels share a log y-axis so they compare directly."""
+    if isinstance(estimators, str):
+        estimators = (estimators,)
+    m = df[df.estimator.isin(estimators) & (df.sample_size == sample_size) & (df.alpha == alpha)]
     nodes = sorted(m.n_nodes.unique())
+    logy = len(estimators) > 1
+    n_ax = len(estimators) + 1
     with plt.rc_context(REPORT_RC):
-        fig, ax = plt.subplots(2, 1, figsize=(SINGLE_W, 3.6), sharex=True)
-        for i, ((mk, ls), n) in enumerate(zip(_styles(len(nodes)), nodes)):
-            s = m[m.n_nodes == n].groupby("in_degree")
-            fmt = dict(marker=mk, ls=ls, color=_shade(i, len(nodes)))
-            ax[0].plot(s.kl.mean().index, s.kl.mean(), label=f"{n} nodes", **fmt)
-            ax[1].plot(s.memory_bytes.mean().index, s.memory_bytes.mean() / 1024, **fmt)
-        ax[0].set_ylim(bottom=0); ax[1].set_ylim(bottom=0)
-        ax[0].set_ylabel("KL divergence (nats)"); ax[1].set_ylabel("CPT memory (KB)")
-        for a, t in zip(ax, ["(a) KL divergence", "(b) CPT memory"]):
+        fig, ax = plt.subplots(n_ax, 1, figsize=(SINGLE_W, 1.8 * n_ax), sharex=True)
+        for j, e in enumerate(estimators):
+            if j:
+                ax[j].sharey(ax[0])
+            me = m[m.estimator == e]
+            for i, ((mk, ls), n) in enumerate(zip(_styles(len(nodes)), nodes)):
+                s = me[me.n_nodes == n].groupby("in_degree")
+                fmt = dict(marker=mk, ls=ls, color=_shade(i, len(nodes)))
+                ax[j].plot(s.kl.mean().index, s.kl.mean(), label=f"{n} nodes", **fmt)
+                if j == 0:
+                    ax[-1].plot(s.memory_bytes.mean().index, s.memory_bytes.mean() / 1024, **fmt)
+            ax[j].set_ylabel("KL divergence (nats)")
+            if logy:
+                ax[j].set_yscale("log")
+            else:
+                ax[j].set_ylim(bottom=0)
+        ax[-1].set_ylim(bottom=0); ax[-1].set_ylabel("CPT memory (KB)")
+        titles = [f"({chr(97 + j)}) KL divergence: {_est_style(e)[2]}" if logy else "(a) KL divergence"
+                  for j, e in enumerate(estimators)] + [f"({chr(97 + len(estimators))}) CPT memory"]
+        for a, t in zip(ax, titles):
             a.set_xticks(ks or sorted(m.in_degree.unique())); a.set_title(t, loc="left")
-        ax[1].set_xlabel("Parent in-degree $k$")
-        _legend_top(fig, ax[0], 3, 1.07)
+        ax[-1].set_xlabel("Parent in-degree $k$")
+        _legend_top(fig, ax[0], 3, 1.0 + 0.07 * 3 / n_ax)
         return _save(fig, out_path)
 
 
@@ -1209,42 +1226,77 @@ def plot_kl_vs_n(df, estimators, in_degrees=None, out_path=None):
 
 
 def plot_size_alpha(df, estimators, out_path=None):
-    """Mean KL (a) by network size and (b) by the Dirichlet alpha of the true CPTs."""
+    """Mean KL (a) by network size and (b) by the Dirichlet alpha of the true CPTs.
+    With a single alpha in df, panel (b) would be one point, so only (a) is drawn."""
+    by_alpha = df.alpha.nunique() > 1
     with plt.rc_context(REPORT_RC):
-        fig, axs = plt.subplots(1, 2, figsize=(DOUBLE_W, 1.8))
+        fig, axs = plt.subplots(1, 2 if by_alpha else 1, figsize=(DOUBLE_W if by_alpha else SINGLE_W, 1.8),
+                                squeeze=False)
+        axs = axs[0]
         for i, e in enumerate(estimators):
             c, fmt, lab = _est_style(e, i)
             q = df[df.estimator == e].groupby("n_nodes").kl.mean(); axs[0].plot(q.index, q, fmt, color=c, label=lab)
-            q = df[df.estimator == e].groupby("alpha").kl.mean();   axs[1].plot(q.index, q, fmt, color=c)
-        axs[0].set_xlabel("Network size (nodes)")
-        axs[1].set_xlabel(r"Dirichlet $\alpha$ of the true CPTs"); axs[1].set_xticks(sorted(df.alpha.unique()))
-        for a, t in zip(axs, ["(a) By network size", "(b) By ground-truth concentration"]):
-            a.set_yscale("log"); a.set_ylabel("KL divergence (nats)"); a.set_title(t, loc="left")
-        _legend_top(fig, axs[0], len(estimators), 1.1)
+            if by_alpha:
+                q = df[df.estimator == e].groupby("alpha").kl.mean(); axs[1].plot(q.index, q, fmt, color=c)
+        axs[0].set_xlabel("Network size (nodes)"); axs[0].set_xticks(sorted(df.n_nodes.unique()))
+        if by_alpha:
+            axs[1].set_xlabel(r"Dirichlet $\alpha$ of the true CPTs"); axs[1].set_xticks(sorted(df.alpha.unique()))
+        titles = ["(a) By network size", "(b) By ground-truth concentration"] if by_alpha else [None]
+        for a, t in zip(axs, titles):
+            a.set_yscale("log"); a.set_ylabel("KL divergence (nats)")
+            if t:
+                a.set_title(t, loc="left")
+        _legend_top(fig, axs[0], len(estimators), 1.1 if by_alpha else 1.14)
         return _save(fig, out_path)
 
 
 def plot_ratio_vs_rho(df, baseline="mle", estimator="nn_32_relu", n_nodes=20, alpha=0.5, out_path=None):
     """KL(baseline) / KL(estimator) vs rows per parent configuration rho = N / r^k,
-    one marker per in-degree. Returns (fig, table of the plotted points)."""
+    one marker per in-degree. baseline may be a list (e.g. ["mle", "dirichlet"]):
+    one series per baseline in its own colour, on a log y-axis so ratios above
+    and below 1 read alike. Returns (fig, table of the plotted points)."""
+    baselines = [baseline] if isinstance(baseline, str) else list(baseline)
     w = (_with_card(df[(df.n_nodes == n_nodes) & (df.alpha == alpha)])
          .pivot_table(index=["in_degree", "sample_size", "card", "dag_idx"], columns="estimator", values="kl")
          .reset_index())
     w["rho"] = w.sample_size / w.card ** w.in_degree
-    w["ratio"] = w[baseline] / w[estimator]
-    g = (w.groupby(["in_degree", "sample_size"]).agg(rho=("rho", "first"), ratio=("ratio", "mean"))
+    for b in baselines:
+        w[f"ratio_{b}"] = w[b] / w[estimator]
+    g = (w.groupby(["in_degree", "sample_size"])
+         .agg(rho=("rho", "first"), **{f"ratio_{b}": (f"ratio_{b}", "mean") for b in baselines})
          .reset_index().sort_values("rho"))
-    c, _, lab = _est_style(estimator)
+    if len(baselines) == 1:
+        g = g.rename(columns={f"ratio_{baselines[0]}": "ratio"})
+    lab = _est_style(estimator)[2]
+    ks = sorted(g.in_degree.unique())
     with plt.rc_context(REPORT_RC):
-        fig, ax = plt.subplots(figsize=(SINGLE_W, 1.9))
-        ax.plot(g.rho, g.ratio, "-", color=c, lw=.7, alpha=.5)
-        ks = sorted(g.in_degree.unique())
-        for (mk, _), k in zip(_styles(len(ks)), ks):
-            s = g[g.in_degree == k]
-            ax.plot(s.rho, s.ratio, mk, color=c, mfc="white", ms=4.5, label=f"$k={k}$")
-        ax.axhline(1, color="#999", lw=.6, ls=":"); ax.set_xscale("log"); ax.set_ylim(0, None)
+        fig, ax = plt.subplots(figsize=(SINGLE_W, 1.9 if len(baselines) == 1 else 2.3))
+        for b in baselines:
+            col = "ratio" if len(baselines) == 1 else f"ratio_{b}"
+            c = _est_style(estimator)[0] if len(baselines) == 1 else _est_style(b)[0]
+            ax.plot(g.rho, g[col], "-", color=c, lw=.7, alpha=.5)
+            for (mk, _), k in zip(_styles(len(ks)), ks):
+                s = g[g.in_degree == k]
+                ax.plot(s.rho, s[col], mk, color=c, mfc="white", ms=4.5,
+                        label=f"$k={k}$" if len(baselines) == 1 else None)
+        ax.axhline(1, color="#999", lw=.6, ls=":"); ax.set_xscale("log")
         ax.set_xlabel(r"Rows per parent configuration $\rho = N/r^{k}$")
-        ax.set_ylabel(f"KL({_est_style(baseline)[2]}) / KL({lab})"); ax.legend(frameon=False)
+        if len(baselines) == 1:
+            ax.set_ylim(0, None)
+            ax.set_ylabel(f"KL({_est_style(baselines[0])[2]}) / KL({lab})"); ax.legend(frameon=False)
+        else:
+            from matplotlib.lines import Line2D
+            ax.set_yscale("log"); ax.set_ylabel(f"KL ratio to {lab}")
+            ax.yaxis.set_major_locator(plt.FixedLocator([0.25, 0.5, 1, 2, 4, 8, 16]))
+            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:g}"))
+            ax.yaxis.set_minor_formatter(plt.NullFormatter())
+            # legend: one coloured line per ratio, then the in-degree markers in grey
+            handles = [Line2D([], [], color=_est_style(b)[0], lw=1.2,
+                              label=f"KL({_est_style(b)[2]}) / KL({lab})") for b in baselines]
+            handles += [Line2D([], [], ls="", marker=mk, color="#555", mfc="white", ms=4.5, label=f"$k={k}$")
+                        for (mk, _), k in zip(_styles(len(ks)), ks)]
+            fig.legend(handles=handles, loc="upper center", ncol=len(baselines), frameon=False,
+                       bbox_to_anchor=(.5, 1.0 + 0.05 * len(handles) / len(baselines)))
         return _save(fig, out_path), g
 
 

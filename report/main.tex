@@ -4,6 +4,7 @@
 \usepackage{amsmath,amssymb}
 \usepackage{xcolor}
 \usepackage{placeins}
+\graphicspath{{./}{../}}   % figures live in ../figs when compiling from report/
 
 % ---------------------------------------------------------------------------
 % Markers for results that are still being run. Search for \pending and
@@ -81,14 +82,14 @@ The remainder of this report is organised as follows. Section~\ref{sec:related} 
 
 \subsection{Parameter Estimation in Bayesian Networks}
 
-Parameter learning in Bayesian networks with a known DAG reduces to estimating node-wise conditional probability distributions independently. In discrete BNs, MLE estimates each CPT entry as a ratio of observed counts \citep{koller2009probabilistic},
+Parameter learning in Bayesian networks with a known DAG reduces to estimating node-wise conditional probability distributions independently. In discrete BNs, MLE estimates each CPT entry as a ratio of observed counts \citep[Sec.~17.2]{koller2009probabilistic},
 \begin{equation}
 \hat{P}(X_i = x_k \mid \Pa(X_i)=u_j)=\frac{N_{ijk}}{N_{ij}},
 \label{eq:mle}
 \end{equation}
-where $N_{ijk}$ counts the samples in which $X_i=x_k$ and $\Pa(X_i)=u_j$. This performs well when data is abundant but fails when parent configurations are unobserved or poorly represented: zero-valued parameters propagate through inference and permanently suppress otherwise valid conclusions \citep{impact_oniko_2013}. The fundamental challenge is the exponential growth of the CPT: a variable with $k$ parents of cardinality $r$ has $r^k$ configurations, and even moderate in-degree produces tables too large to estimate from finite data \citep{learning_oniko_2001,koller2009probabilistic}.
+where $N_{ijk}$ counts the samples in which $X_i=x_k$ and $\Pa(X_i)=u_j$. This performs well when data is abundant but fails when parent configurations are unobserved or poorly represented: zero-valued parameters propagate through inference and permanently suppress otherwise valid conclusions \citep{impact_oniko_2013}. The fundamental challenge is the exponential growth of the CPT: a variable with $k$ parents of cardinality $r$ has $r^k$ configurations, and even moderate in-degree produces tables too large to estimate from finite data \citep[Sec.~5.2]{learning_oniko_2001,koller2009probabilistic}.
 
-Bayesian parameter estimation with Dirichlet priors ensures non-zero probabilities \citep{koller2009probabilistic}, but specifying informative priors at scale is impractical \citep{comprehensive_kyrimi_2021}. Constraint-based priors such as CaMAP improve on uniform Dirichlet priors but still require expert-provided parameter constraints \citep{constrained_di_2021}. Noisy-OR gates reduce complexity from exponential to linear for binary variables, at the cost of independence assumptions that rarely hold in practice \citep{learning_oniko_2001}. Each of these methods still estimates every parent configuration in isolation or imposes a fixed functional form; none learns how configurations relate to one another from the data.
+Bayesian parameter estimation with Dirichlet priors ensures non-zero probabilities \citep[Secs.~17.3--17.4]{koller2009probabilistic}, but specifying informative priors at scale is impractical \citep{comprehensive_kyrimi_2021}. Constraint-based priors such as CaMAP improve on uniform Dirichlet priors but still require expert-provided parameter constraints \citep{constrained_di_2021}. Noisy-OR gates reduce complexity from exponential to linear for binary variables, at the cost of independence assumptions that rarely hold in practice \citep{learning_oniko_2001}. Each of these methods still estimates every parent configuration in isolation or imposes a fixed functional form; none learns how configurations relate to one another from the data.
 
 \subsection{Bayesian Networks in Medical Diagnosis}
 
@@ -107,9 +108,9 @@ This research extends the approach of \citet{Gaogle2026} to the discrete setting
 \subsection{Problem Statement}
 
 A Bayesian network is defined by a directed acyclic graph $G$, where each node has an associated conditional probability distribution, and the joint distribution factorises according to $G$ as
-\begin{equation}
+\begin{equation*}
 P(X_1,\dots,X_n)=\prod_{i=1}^{n} P(X_i\mid\Pa_{X_i}),
-\end{equation}
+\end{equation*}
 where $\Pa_{X_i}$ denotes the parents of $X_i$ in $G$ \citep{koller2007graphical}.
 
 In discrete BNs, methods such as MLE and BPE learn local conditional distributions $P(X_i\mid\Pa_{X_i})$ independently using CPTs. The primary limitation arises from the conditioning on each parent configuration. A variable with $k$ parents of cardinality $r$ has $r^k$ parent configurations, and a separate distribution must be estimated for each. With a fixed amount of data $N$, each configuration is observed on average
@@ -165,18 +166,18 @@ Bayesian parameter estimation (BPE) avoids these zeros by adding a symmetric Dir
 \subsubsection{Neural CPDs}
 
 To address the limitations of tabular CPT parameterisation, the local conditional probability table is replaced with a neural-network-based CPD. For each node $X_i$, a neural network $f_\theta$ is trained to approximate $P(X_i\mid\Pa(X_i))$, where the parent variables are provided as input features. The neural CPD therefore learns a functional mapping
-\begin{equation}
+\begin{equation*}
 P(X_i\mid\Pa(X_i))=f_\theta(\Pa(X_i)),
-\end{equation}
-parameterised by neural network weights $\theta$. Each parent is one-hot encoded at its own cardinality and the encodings are concatenated, so the input width grows with the \emph{sum} of parent cardinalities rather than their product. A root node receives a constant zero input and learns its marginal through the output bias. Hidden layers compute $h=\phi(Wx+b)$ with ReLU activation $\phi$, and the output layer uses a softmax activation function to produce a valid probability distribution over the discrete states of $X_i$ \citep{goodfellow2016deep},
-\begin{equation}
+\end{equation*}
+parameterised by neural network weights $\theta$. Each parent is one-hot encoded at its own cardinality and the encodings are concatenated, so the input width grows with the \emph{sum} of parent cardinalities rather than their product. A root node receives a constant zero input and learns its marginal through the output bias. Hidden layers compute $h=\phi(Wx+b)$ with ReLU activation $\phi$, and the output layer uses a softmax activation function to produce a valid probability distribution over the discrete states of $X_i$ \citep[Sec.~6.2.2.3]{goodfellow2016deep},
+\begin{equation*}
 \hat{y}=\mathrm{softmax}(W_{\mathrm{out}}h+b_{\mathrm{out}}).
-\end{equation}
+\end{equation*}
 This allows the neural network to approximate discrete conditional probability distributions while sharing parameters across parent configurations. The neural CPDs are trained using cross-entropy loss,
-\begin{equation}
+\begin{equation*}
 \mathcal{L}(\theta)=-\frac{1}{N}\sum_{s=1}^{N}\log P_\theta\big(x_i^{(s)} \mid \mathrm{pa}_i^{(s)}\big),
-\end{equation}
-where $x_i^{(s)}$ is the observed node state and $\mathrm{pa}_i^{(s)}$ is the observed parent configuration \citep{goodfellow2016deep}. One network is trained per node. For neural CPDs, 20\% of the training rows are held out as a validation subset, and each node is early-stopped independently on validation cross-entropy. MLE fits on all $N$ rows, so the neural estimators see fewer rows, not more.
+\end{equation*}
+where $x_i^{(s)}$ is the observed node state and $\mathrm{pa}_i^{(s)}$ is the observed parent configuration \citep[Sec.~6.2.1.1]{goodfellow2016deep}. One network is trained per node. For neural CPDs, 20\% of the training rows are held out as a validation subset, and each node is early-stopped independently on validation cross-entropy. MLE fits on all $N$ rows, so the neural estimators see fewer rows, not more.
 
 Table~\ref{tab:estimators} lists the estimators. The linear softmax, with no hidden layer, is equivalent to L2-penalised multinomial logistic regression fitted per node; it shares parameters across configurations but cannot represent interactions between parents, and so acts as a control for the effect of the hidden layer. \texttt{nn\_32} has a single hidden layer of 32 units with default settings, and the two deeper networks were selected by the tuning procedure below.
 
@@ -217,11 +218,11 @@ On this data, estimator performance is assessed by three-fold cross-validation, 
 
 \subsection{Evaluation}
 
-The primary metric for the synthetic experiments is the Kullback-Leibler divergence between the ground-truth joint distribution $P^*$ and the learned distribution $\hat P$ \citep{koller2009probabilistic}. The sum over all $r^n$ joint states is intractable at these network sizes, so the chain-rule decomposition is used, with a Monte Carlo estimate over the $S=10\,000$ test rows $x^{(s)}\sim P^*$:
-\begin{align}
-\KL(P^*\|\hat P) &= \mathbb{E}_{P^*}\Big[\sum_{i} \KL\big(P^*_{i}\,\|\,\hat P_{i}\big)\Big] \nonumber\\
+The primary metric for the synthetic experiments is the Kullback-Leibler divergence between the ground-truth joint distribution $P^*$ and the learned distribution $\hat P$ \citep[App.~A.1.3]{koller2009probabilistic}. The sum over all $r^n$ joint states is intractable at these network sizes, so the chain-rule decomposition is used, with a Monte Carlo estimate over the $S=10\,000$ test rows $x^{(s)}\sim P^*$:
+\begin{align*}
+\KL(P^*\|\hat P) &= \mathbb{E}_{P^*}\Big[\sum_{i} \KL\big(P^*_{i}\,\|\,\hat P_{i}\big)\Big] \\
 &\approx \frac{1}{S}\sum_{s=1}^{S}\sum_{i=1}^{n}\sum_{x_i} P^*_{is}(x_i)\log\frac{P^*_{is}(x_i)}{\hat P_{is}(x_i)},
-\end{align}
+\end{align*}
 where $P^*_{i}$ and $\hat P_{i}$ are the true and learned distributions of $X_i$ given its parents, and $P^*_{is}(x_i) = P^*(x_i\mid \mathrm{pa}_i^{(s)})$, with $\hat P_{is}$ defined likewise.
 The inner sum over each child's states is exact; only the parent configurations are sampled. Because KL is summed over nodes it scales with network size, so it is reported per node where network sizes are compared.
 
@@ -233,12 +234,12 @@ Alongside these measures of accuracy, the computational cost of each estimator i
 
 \subsection{How Tabular Methods Fail}
 
-The synthetic setup reproduces the well-known behaviour of tabular estimators under sparse data \citep{learning_oniko_2001,koller2009probabilistic}. Both MLE and the Dirichlet estimator estimate each parent configuration from its own counts, so their CPTs grow exponentially with in-degree. Figure~\ref{fig:mle} shows that, for MLE, KL divergence and CPT memory both rise sharply once a node's parent configurations ($2^k$) outnumber the training rows: in 40-node networks, KL rises from 0.28 to 58 nats and memory from 2.5 to 508\,KB as in-degree goes from 2 to 10. \pending{Dirichlet KL divergence as in-degree increases.}
+The synthetic setup reproduces the well-known behaviour of tabular estimators under sparse data \citep[Sec.~17.2]{learning_oniko_2001,koller2009probabilistic}. Both MLE and the Dirichlet estimator estimate each parent configuration from its own counts, so their CPTs grow exponentially with in-degree. Figure~\ref{fig:mle} shows that, for MLE, KL divergence and CPT memory both rise sharply once a node's parent configurations ($2^k$) outnumber the training rows: in 40-node networks, KL rises from 0.28 to 58 nats and memory from 2.5 to 508\,KB as in-degree goes from 2 to 10. \pending{Dirichlet KL divergence as in-degree increases.}
 
 \begin{figure}[pos=tbp]
 \centering
-\includegraphics[width=\columnwidth]{figs/mle_fails.pdf}
-\caption{MLE on synthetic networks ($r=2$) as in-degree increases ($N=1000$, $\alpha=0.5$, mean over five DAGs; darker is larger). (a) KL divergence to the ground truth. (b) Total CPT memory.}\label{fig:mle}
+\includegraphics[width=\columnwidth]{figs/mle_fails_c2.png}
+\caption{Tabular estimators on synthetic networks ($r=2$) as in-degree increases ($N=1000$, $\alpha=0.5$, mean over five DAGs; darker is larger). KL divergence to the ground truth for (a) MLE and (b) the Dirichlet estimator (shared log-scaled y-axis). (c) Total CPT memory, the same for both.}\label{fig:mle}
 \end{figure}
 
 The cause is data coverage rather than computation. In 20-node networks at $N=1000$, the share of parent configurations never seen in training rises from 0.5\% at $k=2$ to 78\% at $k=10$, while every MLE fit takes under one second. Both tabular estimators assign a uniform distribution to every unseen configuration, since the Dirichlet pseudocount alone carries no information about it, so smoothing removes zero probabilities but cannot recover these columns. Tabular estimation therefore degrades smoothly as the number of rows per parent configuration falls.
@@ -250,7 +251,7 @@ Figure~\ref{fig:arms} compares every neural architecture with MLE on the configu
 
 \begin{figure*}[pos=tbp]
 \centering
-\includegraphics[width=\textwidth]{figs/arms.pdf}
+\includegraphics[width=\textwidth]{figs/arms_c2.png}
 \caption{All estimators on the shared configurations at $r\in\{2,4\}$ (10--30 nodes, $\alpha=0.5$, $N\in\{600,1000,1400\}$; log-scaled axes). (a) Mean KL divergence vs.\ the number of parent configurations $r^k$. (b) Free parameters for a 20-node network.}\label{fig:arms}
 \end{figure*}
 
@@ -267,17 +268,17 @@ Figure~\ref{fig:klN} shows how each estimator responds to more data. More rows h
 
 \begin{figure*}[pos=tbp]
 \centering
-\includegraphics[width=\textwidth]{figs/kl_vs_N.pdf}
+\includegraphics[width=\textwidth]{figs/kl_vs_N_c2.png}
 \caption{KL divergence against training rows at each in-degree ($r=2$, mean over all network sizes and five DAGs; log-scaled y-axis).}\label{fig:klN}
 \end{figure*}
 
 Figure~\ref{fig:sizealpha} shows KL divergence over different ground-truth distributions. MLE degrades fastest with network size and with flatter true CPTs. As networks grow from 5 to 40 nodes, MLE's mean KL rises from 0.05 to 15.7 nats against 0.02 to 1.85 for \texttt{nn\_32}, so the ratio between them grows from 2.8 to 8.5. Peaked ground truths ($\alpha=0.1$) concentrate the data on fewer configurations and keep MLE's error low, at 1.9 times that of \texttt{nn\_32}. Flat ground truths ($\alpha=1$) spread the data across all configurations, and MLE's error rises to 12 times that of \texttt{nn\_32}, which is largely insensitive to $\alpha$.
 
-\begin{figure*}[pos=tbp]
+\begin{figure}[pos=tbp]
 \centering
-\includegraphics[width=\textwidth]{figs/size_alpha.pdf}
-\caption{Mean KL divergence (log-scaled y-axis), (a) by parent in-degree ($r=2$, all network sizes and sample sizes) and (b) by the Dirichlet concentration $\alpha$ of the true CPTs ($r=2$).}\label{fig:sizealpha}
-\end{figure*}
+\includegraphics[width=\columnwidth]{figs/size_alpha_c2.png}
+\caption{Mean KL divergence by network size ($r=2$, $\alpha=0.5$, mean over all in-degrees, sample sizes and DAGs; log-scaled y-axis).}\label{fig:sizealpha}
+\end{figure}
 
 In-degree, cardinality and sample size all act on the estimators through the number of rows per parent configuration, $\rho=N/r^k$ (Eq.~\ref{eq:rho}). Figure~\ref{fig:rho} plots the ratio of MLE's KL to \texttt{nn\_32}'s against $\rho$ for every $(k,N)$ setting at $r=2$, pooling across network sizes and DAGs. The advantage of the neural CPD falls steadily as $\rho$ increases, from over 6 times at $\rho\approx0.2$ to roughly 2 times at $\rho=350$, and the settings from different in-degrees join into a single decreasing trend. The neural CPD is most valuable exactly where data per configuration is scarcest.
 
@@ -285,8 +286,8 @@ The $r=4$ experiments confirm that the same pattern holds at higher cardinality:
 
 \begin{figure}[pos=tbp]
 \centering
-\includegraphics[width=\columnwidth]{figs/rho.pdf}
-\caption{Ratio of MLE to \texttt{nn\_32} KL divergence against rows per parent configuration $\rho = N/2^k$ ($r=2$, mean over all network sizes and DAGs; log-scaled x-axis).}\label{fig:rho}
+\includegraphics[width=\columnwidth]{figs/rho_c2.png}
+\caption{Ratio of MLE's and the Dirichlet estimator's KL divergence to that of \texttt{nn\_32}, against rows per parent configuration $\rho = N/2^k$ ($r=2$, 20-node networks, mean over five DAGs; log-scaled axes). Values above 1 favour \texttt{nn\_32}.}\label{fig:rho}
 \end{figure}
 
 The same advantage can be expressed as data efficiency. Table~\ref{tab:isokl} shows the training rows needed for each estimator to reach a KL divergence of 5.0~nats, interpolated from the mean KL at each sample size ($r=2$). At $k=4$, MLE needs 458 rows against fewer than 200 for \texttt{nn\_32}. At $k\geq8$, MLE and the linear softmax cannot reach this threshold at any sample size in the grid, whereas \texttt{nn\_32} reaches it at 462 rows ($k=8$) and 918 rows ($k=10$).
@@ -344,7 +345,7 @@ Figure~\ref{fig:realmean} shows held-out log-likelihood averaged over all settin
 
 \begin{figure}[pos=tbp]
 \centering
-\includegraphics[width=\columnwidth]{figs/real_mean.pdf}
+\includegraphics[width=\columnwidth]{figs/real_mean.png}
 \caption{Held-out log-likelihood per row, mean over all nine settings and three folds (higher is better; log-scaled x-axis).}\label{fig:realmean}
 \end{figure}
 
@@ -352,7 +353,7 @@ Figure~\ref{fig:real} breaks this down across all nine discretisation and DAG co
 
 \begin{figure*}[pos=tbp]
 \centering
-\includegraphics[width=\textwidth]{figs/real_loglik.pdf}
+\includegraphics[width=\textwidth]{figs/real_loglik.png}
 \caption{Held-out log-likelihood per row for each discretisation (rows) and DAG confidence (columns), excluding MLE (mean $\pm$ s.d.\ over three folds; log-scaled x-axis).}\label{fig:real}
 \end{figure*}
 
@@ -366,17 +367,17 @@ Figure~\ref{fig:realparams} shows the parameter cost of each estimator across th
 
 \begin{figure}[pos=tbp]
 \centering
-\includegraphics[width=\columnwidth]{figs/real_params.pdf}
-\caption{Free parameters for each estimator on the real data, plotted against the CPT size (tabular complexity) for the same discretisation and DAG (log-scaled axes). The diagonal line marks equal parameter count.}\label{fig:realparams}
+\includegraphics[width=\columnwidth]{figs/real_params.png}
+\caption{Free parameters for each neural estimator on the real data, plotted against the CPT size (tabular complexity) for the same discretisation and DAG; one point per setting (log-scaled axes). The dotted diagonal marks equal parameter count, which is where MLE and the Dirichlet estimator lie.}\label{fig:realparams}
 \end{figure}
 
-The smaller parameter count does not make the neural estimators cheaper to fit. Figure~\ref{fig:timing} shows fit time on the real data. MLE and the Dirichlet estimator fit in under a minute at every sample size. The neural estimators scale with $N$: \texttt{nn\_32} takes 14\,s at $N=500$ and 122\,s at $N=50\,000$, while \texttt{nn\_128\_64} reaches 270\,s at $N=50\,000$. The cost is acceptable for a one-off fit but would need consideration in an iterative or online setting.
+The smaller parameter count does not make the neural estimators cheaper to fit. Figure~\ref{fig:timing} shows serial fit time on the real data for three settings spanning the size of the tabular CPTs. The cost of the tabular estimators is set by the size of their tables rather than by $N$: MLE and the Dirichlet estimator fit in under a second for the 1\,348- and 49\,496-parameter CPTs, but take about 50\,s and 150\,s respectively for the 9-million-parameter CPT of L3 with the low-confidence graph. The neural estimators instead scale with $N$ and barely with the CPT size: \texttt{nn\_32} takes 12--16\,s at $N=500$ and 111--134\,s at $N=50\,000$, and \texttt{nn\_128\_64} reaches 248--285\,s at $N=50\,000$. At the largest CPT, every neural estimator therefore fits faster than the Dirichlet estimator for $N\le10\,000$. The cost is acceptable for a one-off fit but would need consideration in an iterative or online setting.
 
-\begin{figure}[pos=tbp]
+\begin{figure*}[pos=tbp]
 \centering
-\includegraphics[width=\columnwidth]{figs/real_timing.pdf}
-\caption{Fit time on the real dataset (mean $\pm$ s.d.\ over three folds across all discretisation and DAG settings; log-scaled axes).}\label{fig:timing}
-\end{figure}
+\includegraphics[width=\textwidth]{figs/real_timing.png}
+\caption{Fit time on the real dataset from a serial run on one fold, for three discretisation and DAG settings spanning the size of the tabular CPTs (log-scaled axes).}\label{fig:timing}
+\end{figure*}
 
 % ===========================================================================
 \FloatBarrier
