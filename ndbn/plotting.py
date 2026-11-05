@@ -6,6 +6,8 @@ Change the DEFAULT_* values (e.g. `plotting.DEFAULT_ALPHA = 0.1`) to control
 which slice you're viewing.
 """
 
+import json
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -1037,14 +1039,15 @@ SINGLE_W, DOUBLE_W = 3.4, 7.0      # column and page widths (inches)
 REPORT_ALIASES = {"nn_32_relu": "nn_32", "01_256x128_lr3e-4": "nn_256_128",
                   "k6_128_64_9": "nn_128_64", "dirichlet_0.5": "dirichlet"}
 # per estimator: colour, marker + line style, label (same across every figure)
-REPORT_COLORS = {"mle": "#222222", "dirichlet": "#7c3aed", "laplace": "#0d9488", "nn_linear": "#d97706",
+REPORT_COLORS = {"mle": "#222222", "dirichlet": "#7c3aed", "laplace": "#0d9488", "dirichlet_tuned": "#9333ea", "nn_linear": "#d97706",
                  "nn_32": "#2563eb", "nn_256_128": "#16a34a", "nn_128_64": "#e11d48",
                  "nn_256": "#0891b2", "nn_128": "#be185d", "nn_64_32": "#4d7c0f",
                  "nn_64": "#a16207", "nn_32_16": "#475569"}
-REPORT_FMT    = {"mle": "o-", "dirichlet": "D:", "laplace": "p:", "nn_linear": "s--", "nn_32": "^-.",
+REPORT_FMT    = {"mle": "o-", "dirichlet": "D:", "laplace": "p:", "dirichlet_tuned": "d--", "nn_linear": "s--", "nn_32": "^-.",
                  "nn_256_128": "P-", "nn_128_64": "*--",
                  "nn_256": "X-", "nn_128": "v:", "nn_64_32": "h-.", "nn_64": "<--", "nn_32_16": ">:"}
-REPORT_LABELS = {"mle": "MLE", "dirichlet": "Dirichlet", "laplace": "Laplace"}
+REPORT_LABELS = {"mle": "MLE", "dirichlet": "Dirichlet", "laplace": "Laplace",
+                 "dirichlet_tuned": "Dirichlet (tuned)"}
 
 
 def _canon(name):
@@ -1055,12 +1058,13 @@ def _est_style(name, i=0):
     """(colour, fmt, label) for an estimator; unknown names get the i-th fallback,
     whose marker is one no named estimator uses (so it stays distinct in black and white)."""
     c = _canon(name)
-    used = {f.rstrip("-.:") for f in REPORT_FMT.values()}
-    free = [m for m in _MARKERS + ["h", "<", ">", "p", "d"] if m not in used]
-    fmt = free[i % len(free)] + _LINESTYLES[i % len(_LINESTYLES)]
-    return (REPORT_COLORS.get(c, _PALETTE[i % len(_PALETTE)]),
-            REPORT_FMT.get(c, fmt),
-            REPORT_LABELS.get(c, c))
+    if c in REPORT_FMT:
+        fmt = REPORT_FMT[c]
+    else:
+        used = {f.rstrip("-.:") for f in REPORT_FMT.values()}
+        free = [m for m in _MARKERS + ["h", "<", ">", "p", "d", "1", "2", "3", "4"] if m not in used] or _MARKERS
+        fmt = free[i % len(free)] + _LINESTYLES[i % len(_LINESTYLES)]
+    return (REPORT_COLORS.get(c, _PALETTE[i % len(_PALETTE)]), fmt, REPORT_LABELS.get(c, c))
 
 
 def _shade(i, n, cmap="Blues"):
@@ -1208,6 +1212,28 @@ def plot_estimators_by_k(df, estimators, param_nodes=20, out_path=None):
         return _save(fig, out_path)
 
 
+def plot_structured(df, estimators, out_path=None):
+    """Structured ground truth: mean KL divergence vs in-degree, one panel per
+    interaction share (0 = additive logistic CPDs), one line per estimator,
+    averaged over sample sizes and DAGs."""
+    levels = sorted(df.interaction.unique())
+    titles = {0.0: "additive (no interactions)"}
+    with plt.rc_context(REPORT_RC):
+        fig, axs = plt.subplots(1, len(levels), figsize=(DOUBLE_W, 2.0), sharey=True, squeeze=False)
+        for ax, lam, t in zip(axs[0], levels, "abcdefgh"):
+            sub = df[df.interaction == lam]
+            for i, e in enumerate(estimators):
+                c, fmt, lab = _est_style(e, i)
+                q = sub[sub.estimator == e].groupby("in_degree").kl.mean()
+                ax.plot(q.index, q, fmt, color=c, label=lab)
+            ax.set_yscale("log"); ax.set_xticks(sorted(sub.in_degree.unique()))
+            ax.set_xlabel("Parent in-degree $k$")
+            ax.set_title(f"({t}) " + titles.get(lam, f"interaction share {lam:g}"), loc="left")
+        axs[0, 0].set_ylabel("KL divergence (nats)")
+        _legend_top(fig, axs[0, 0], len(estimators), 1.12)
+        return _save(fig, out_path)
+
+
 def plot_kl_vs_n(df, estimators, in_degrees=None, out_path=None):
     """KL vs training rows, one panel per in-degree, one line per estimator."""
     in_degrees = in_degrees or sorted(df.in_degree.unique())
@@ -1248,6 +1274,17 @@ def plot_size_alpha(df, estimators, out_path=None):
                 a.set_title(t, loc="left")
         _legend_top(fig, axs[0], len(estimators), 1.1 if by_alpha else 1.14)
         return _save(fig, out_path)
+
+
+def with_full_indegree_kl(df):
+    """Rows recorded with node_kl, with kl replaced by the sum of the conditional
+    KL terms of the nodes that have exactly in_degree parents. For those nodes
+    rho = N / r^k is exact; the network total also mixes in the first k nodes of
+    each DAG, which have fewer parents."""
+    out = df[df["node_kl"].notna()].copy()
+    out["kl"] = [sum(term for term, n_pa in json.loads(s).values() if n_pa == k)
+                 for s, k in zip(out["node_kl"], out["in_degree"])]
+    return out
 
 
 def plot_ratio_vs_rho(df, baselines=("mle", "dirichlet"), estimator="nn_32", n_nodes=None, alpha=0.5,

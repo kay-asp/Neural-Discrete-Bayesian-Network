@@ -13,8 +13,8 @@ import torch.nn as nn
 from tqdm.auto import tqdm
 
 from .evaluation import kl_mle, kl_nn, mle_param_stats, timed_fit
-from .generation import gen_CPTs, gen_dag_indegree, make_seed
-from .mle import fit_mle, fit_dirichlet
+from .generation import gen_CPTs, gen_dag_indegree, gen_logistic_CPTs, make_seed
+from .mle import fit_mle, fit_dirichlet, fit_dirichlet_tuned
 from . import models as _models
 from .models import NeuralCPDs
 from .tracing import Trace, history_matrix
@@ -32,7 +32,8 @@ def with_card(df):
     return df
 
 
-def config_exists(df, estimator, dag, n_nodes, in_deg, alpha, sample_size, card=None):
+def config_exists(df, estimator, dag, n_nodes, in_deg, alpha, sample_size, card=None,
+                  interaction=None):
     """Is this config already in df? card=None skips the card check; pass
     with_card(df) so rows from before card was recorded count as card=2."""
     if df.empty or "estimator" not in df.columns:
@@ -47,6 +48,8 @@ def config_exists(df, estimator, dag, n_nodes, in_deg, alpha, sample_size, card=
     )
     if card is not None:
         match &= df["card"] == card
+    if interaction is not None:     # structured ground truth (generator); absent column = no match
+        match &= df["interaction"] == interaction if "interaction" in df else False
     return match.any()
 
 def flush(records, path):
@@ -62,22 +65,40 @@ def flush(records, path):
     records.clear()
 
 
-def build_dag(dag, in_deg, n_nodes, alpha, card):
+def build_dag(dag, in_deg, n_nodes, alpha, card, generator=None):
     """Ground-truth DAG + CPTs for one config -> (G, true_model).
 
     Shared by the main experiment and the sweep, so both see the same networks.
+    generator : None = Dirichlet(alpha) CPT columns (gen_CPTs); or
+                {"kind": "logistic", "scale": s, "interaction": x} for CPTs with
+                structure shared across parent configurations (gen_logistic_CPTs),
+                on the same DAG.
     """
     # alpha and card are left out of the seeds, so every alpha and card shares
     # the same DAG structure and data seeds (paired comparisons)
     G = gen_dag_indegree(n_nodes, in_deg, seed=make_seed("dag", dag, in_deg, n_nodes))
-    true_model = gen_CPTs(G, card, alpha, seed=make_seed("cpt", dag, in_deg, n_nodes))
+    cpt_seed = make_seed("cpt", dag, in_deg, n_nodes)
+    if generator is None:
+        true_model = gen_CPTs(G, card, alpha, seed=cpt_seed)
+    elif generator["kind"] == "logistic":
+        true_model = gen_logistic_CPTs(G, card, seed=cpt_seed, scale=generator["scale"],
+                                       interaction=generator["interaction"])
+    else:
+        raise ValueError(f"unknown generator {generator['kind']!r}")
     return G, true_model
 
 
-def dag_data_dir(results_dir, alpha, n_nodes, in_deg, dag, card):
+def generator_label(alpha, generator=None):
+    """Data-folder name of a ground truth: alpha_<a> for Dirichlet CPTs."""
+    if generator is None:
+        return f"alpha_{alpha}"
+    return f"{generator['kind']}_s{generator['scale']:.4f}_i{generator['interaction']}"
+
+
+def dag_data_dir(results_dir, alpha, n_nodes, in_deg, dag, card, generator=None):
     """Where one DAG's cached train.csv / test.csv live (keyed on card too, so
     different cardinalities never share cached samples)."""
-    path = os.path.join(results_dir, "data", f"card_{card}", f"alpha_{alpha}",
+    path = os.path.join(results_dir, "data", f"card_{card}", generator_label(alpha, generator),
                         f"BN_{n_nodes}", f"indegree_{in_deg}", f"dag_{dag}")
     os.makedirs(path, exist_ok=True)
     return path
@@ -96,15 +117,15 @@ def load_or_simulate(path, true_model, n_samples, seed):
     return data
 
 
-def load_dag(results_dir, dag, in_deg, n_nodes, alpha, card, n_train, n_test=None):
+def load_dag(results_dir, dag, in_deg, n_nodes, alpha, card, n_train, n_test=None, generator=None):
     """Ground truth plus cached train (and test) samples for one DAG.
 
     -> (G, true_model, train_data, test_data or None). Simulates and caches on
     first use, so calling it once per DAG in the parent before dispatching
     parallel jobs means workers only read the CSVs (no two writers per file).
     """
-    G, true_model = build_dag(dag, in_deg, n_nodes, alpha, card)
-    dag_dir = dag_data_dir(results_dir, alpha, n_nodes, in_deg, dag, card)
+    G, true_model = build_dag(dag, in_deg, n_nodes, alpha, card, generator)
+    dag_dir = dag_data_dir(results_dir, alpha, n_nodes, in_deg, dag, card, generator)
     data = load_or_simulate(os.path.join(dag_dir, "train.csv"), true_model,
                             n_train, make_seed("train", dag, in_deg, n_nodes))
     test_data = None if n_test is None else load_or_simulate(
@@ -212,6 +233,9 @@ def fit_estimator(est, G, sample, train_df, val_df, cards, n_epochs, seed):
     """
     if est["type"] == "mle":
         return timed_fit(fit_mle, G, sample, cards)
+    if est["type"] == "dirichlet_tuned":     # pseudocount chosen on val_df, refitted on the sample
+        return timed_fit(fit_dirichlet_tuned, G, train_df, val_df, sample, cards,
+                         **({"grid": est["grid"]} if "grid" in est else {}))
     if est["type"] == "dirichlet":
         return timed_fit(fit_dirichlet, G, sample, cards,
                          pseudo_count=est.get("pseudo_count", 0.5))
@@ -231,7 +255,10 @@ def fit_estimator(est, G, sample, train_df, val_df, cards, n_epochs, seed):
 def model_stats(model, n_epochs):
     """Size stats of a fitted model, plus early-stopping stats for an NN."""
     if not isinstance(model, NeuralCPDs):
-        return mle_param_stats(model)
+        stats = mle_param_stats(model)
+        if hasattr(model, "pseudo_count_"):
+            stats["pseudo_count"] = model.pseudo_count_
+        return stats
     extra = model.param_stats()
     extra["stop_epoch_mean"] = float(np.mean(list(model.stop_epoch_.values())))
     extra["best_epoch_mean"] = float(np.mean(list(model.best_epoch_.values())))
@@ -241,12 +268,13 @@ def model_stats(model, n_epochs):
 
 
 def evaluate(model, true_model, test_data, cards, n_epochs):
-    """KL vs ground truth plus size / early-stopping stats -> (kl, se, extra)."""
+    """KL vs ground truth plus size / early-stopping stats -> (kl, se, extra).
+    extra["node_kl"] is JSON: node -> [its conditional KL term, number of parents]."""
     if isinstance(model, NeuralCPDs):
-        kl, se = kl_nn(true_model, model, test_data, cards)
+        kl, se, nodes = kl_nn(true_model, model, test_data, cards, return_nodes=True)
     else:
-        kl, se = kl_mle(true_model, model, test_data)
-    return kl, se, model_stats(model, n_epochs)
+        kl, se, nodes = kl_mle(true_model, model, test_data, return_nodes=True)
+    return kl, se, {**model_stats(model, n_epochs), "node_kl": json.dumps(nodes)}
 
 
 def _run_dag_job(job, estimators, sample_sizes, card, val_frac, n_test, n_epochs,
@@ -257,8 +285,9 @@ def _run_dag_job(job, estimators, sample_sizes, card, val_frac, n_test, n_epochs
     run_experiments can hand it to worker processes.
     """
     n_nodes, in_deg, alpha, dag = job["n_nodes"], job["in_degree"], job["alpha"], job["dag"]
+    generator = job.get("generator")
     G, true_model, data, test_data = load_dag(results_dir, dag, in_deg, n_nodes, alpha,
-                                              card, max(sample_sizes), n_test)
+                                              card, max(sample_sizes), n_test, generator)
 
     # actual density of this realised graph
     max_possible = n_nodes * (n_nodes - 1) / 2
@@ -292,6 +321,8 @@ def _run_dag_job(job, estimators, sample_sizes, card, val_frac, n_test, n_epochs
                 "in_degree":   in_deg,
                 "alpha":       alpha,
                 "card":        card,
+                **({"generator": generator["kind"], "logit_scale": generator["scale"],
+                    "interaction": generator["interaction"]} if generator else {}),
                 "sample_size": samples,          # budget
                 "n_fit":       n_fit,            # rows fitted (NN excludes val)
                 "density":     density,
@@ -317,7 +348,7 @@ def _run_dag_job(job, estimators, sample_sizes, card, val_frac, n_test, n_epochs
 def run_experiments(node_counts, in_degrees, alphas, n_dags, sample_sizes,
                     estimators, card, val_frac, n_test, n_epochs,
                     results_dir, verbose=True, results_name="results.csv",
-                    n_jobs=1, device=None, torch_threads=None):
+                    n_jobs=1, device=None, torch_threads=None, generator=None):
     """Run the full grid, appending rows to <results_dir>/<results_name>.
 
     Resumable: configs already in that CSV (for this card) are skipped, and
@@ -327,6 +358,8 @@ def run_experiments(node_counts, in_degrees, alphas, n_dags, sample_sizes,
     n_jobs, device, torch_threads : speed settings, see _parallel_map. One job
     is one DAG; rows are written as each job finishes. fit_time_s from a
     parallel run is inflated by contention: take timing from a serial run.
+    generator : None (Dirichlet(alpha) CPTs) or a build_dag generator spec; its
+    interaction share is recorded and checked, so several share one CSV.
     """
     os.makedirs(results_dir, exist_ok=True)
     results_csv = os.path.join(results_dir, results_name)
@@ -341,10 +374,12 @@ def run_experiments(node_counts, in_degrees, alphas, n_dags, sample_sizes,
                 for dag in range(1, n_dags + 1):
                     todo = {(est["name"], s) for est in estimators for s in sample_sizes
                             if not config_exists(existing_df, est["name"], dag,
-                                                 n_nodes, in_deg, alpha, s, card)}
+                                                 n_nodes, in_deg, alpha, s, card,
+                                                 generator["interaction"] if generator else None)}
                     if todo:
                         jobs.append({"n_nodes": n_nodes, "in_degree": in_deg,
-                                     "alpha": alpha, "dag": dag, "todo": todo})
+                                     "alpha": alpha, "dag": dag, "todo": todo,
+                                     "generator": generator})
                 if verbose and len(jobs) == n_before:
                     tqdm.write(f"loaded results: n={n_nodes} k={in_deg} alpha={alpha}")
     if n_jobs != 1:
