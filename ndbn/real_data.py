@@ -627,6 +627,18 @@ def run_selected(raw_df, selection, candidates, **kwargs):
             key = (r.disc_level, r.dag_level, r.n_train_spec) + ((int(r.fold),) if per_fold else ())
             chosen.setdefault(key, []).append(
                 {**c, "name": c["family"], "selected_config": c["name"]})
+
+        path = os.path.join(kwargs["results_dir"], kwargs.get("results_name", "results.csv"))
+        old = pd.read_csv(path, dtype={"n_train_spec": str}) if os.path.exists(path) else None
+        if old is not None and "selected_config" in old:
+            sel = selection.rename(columns={"family": "estimator"})[
+                ["disc_level", "dag_level", "n_train_spec", "estimator", "selected_config"]]
+            m = old.merge(sel, on=["disc_level", "dag_level", "n_train_spec", "estimator"],
+                          suffixes=("", "_now"))
+            stale = m[m["selected_config"] != m["selected_config_now"]]
+            if len(stale):
+                print(f"WARNING: {len(stale)} rows in {path} are for configs the selection no "
+                      "longer picks and will be kept; delete them to refit with the new selection")
     else:
         estimators = []
         for r in selection.itertuples():
