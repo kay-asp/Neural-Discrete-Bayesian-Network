@@ -59,9 +59,10 @@ def backup(path):
 
 
 def results_path(ns, name, out):
-    """A results file: in RESULTS_DIR normally, in out for a smoke run (run_experiments
-    joins results_dir with an absolute name to the name itself)."""
-    return os.path.abspath(os.path.join(out, name)) if out else os.path.join(ns["RESULTS_DIR"], name)
+    """Absolute path of a results file: in RESULTS_DIR normally, in out for a smoke run.
+    Always absolute, because run_experiments joins results_dir with results_name, and
+    joining onto an absolute name leaves it unchanged."""
+    return os.path.abspath(os.path.join(out or ns["RESULTS_DIR"], name))
 
 
 # ── steps ───────────────────────────────────────────────────────────────────
@@ -88,10 +89,13 @@ def step2_refit_unpaired(cells, ns, smoke, out):
     if smoke:   # one cell only: 10 nodes, k=2, DAG 1, N=1000
         old &= (df["n_nodes"] == "10") & (df["in_degree"] == "2") & (df["dag_idx"] == "1")
     n_old, n_before = int(old.sum()), len(df)
-    if not smoke and n_old != 800:
-        raise RuntimeError(f"expected 800 rows from the 11 Oct run, found {n_old}: not deleting anything")
-    df[~old].to_csv(path, index=False)
-    log(f"  removed {n_old} rows fitted on the separate 1000-row draw; refitting them on the cached data")
+    if smoke or n_old == 800:
+        df[~old].to_csv(path, index=False)
+        log(f"  removed {n_old} rows fitted on the separate 1000-row draw; refitting them on the cached data")
+    elif n_old == 0:   # an earlier run already removed them: refit whatever is missing
+        log(f"  the 800 rows were already removed ({n_before} rows now); refitting them on the cached data")
+    else:
+        raise RuntimeError(f"expected 800 rows from the 11 Oct run (or none), found {n_old}: not deleting anything")
     grid = dict(node_counts=ns["NODE_COUNTS_C2"], in_degrees=ns["IN_DEGREES_C2"], n_dags=ns["SIM_C2"],
                 sample_sizes=ns["SAMPLE_SIZES_C2"])
     if smoke:
@@ -101,10 +105,17 @@ def step2_refit_unpaired(cells, ns, smoke, out):
                           results_dir=ns["RESULTS_DIR"], verbose=False, results_name=path,
                           n_jobs=N_JOBS_SMALL_TABLES, device=ns["DEVICE_OVERRIDE"],
                           torch_threads=ns["TORCH_THREADS"], **grid)
-    n_after = len(pd.read_csv(path))
-    log(f"  rows: {n_before} before, {n_after} after (should be equal)")
-    if n_after != n_before:
-        raise RuntimeError("row count changed: check results.csv against its backup")
+    # check: every r=2 estimator has the full grid, exactly once
+    res = pd.read_csv(path)
+    c2 = res[res["card"] == ns["CARD_C2"]]
+    keys = ["estimator", "n_nodes", "in_degree", "sample_size", "dag_idx", "alpha"]
+    n_grid = len(grid["node_counts"]) * len(grid["in_degrees"]) * grid["n_dags"] * len(grid["sample_sizes"])
+    counts = c2[c2["estimator"].isin([e["name"] for e in ns["ESTIMATORS_C2"]])].groupby("estimator").size()
+    log(f"  rows: {len(res)} in total; r=2 rows per estimator: {counts.to_dict()}")
+    if c2.duplicated(keys).any():
+        raise RuntimeError("duplicate r=2 rows: check results.csv against its backup")
+    if not smoke and (counts != n_grid).any():
+        raise RuntimeError(f"some r=2 estimators don't have all {n_grid} configurations: re-run step 2")
     if not out:   # report figures from the repaired results
         run_cell(cells, "c3a0b0f2", ns)
 
