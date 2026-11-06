@@ -1043,7 +1043,7 @@ REPORT_COLORS = {"mle": "#222222", "dirichlet": "#7c3aed", "laplace": "#0d9488",
                  "nn_32": "#2563eb", "nn_256_128": "#16a34a", "nn_128_64": "#e11d48",
                  "nn_256": "#0891b2", "nn_128": "#be185d", "nn_64_32": "#4d7c0f",
                  "nn_64": "#a16207", "nn_32_16": "#475569"}
-REPORT_FMT    = {"mle": "o-", "dirichlet": "D:", "laplace": "p:", "dirichlet_tuned": "d--", "nn_linear": "s--", "nn_32": "^-.",
+REPORT_FMT    = {"mle": "o-", "dirichlet": "D:", "laplace": "x--", "dirichlet_tuned": "d-", "nn_linear": "s--", "nn_32": "^-.",
                  "nn_256_128": "P-", "nn_128_64": "*--",
                  "nn_256": "X-", "nn_128": "v:", "nn_64_32": "h-.", "nn_64": "<--", "nn_32_16": ">:"}
 REPORT_LABELS = {"mle": "MLE", "dirichlet": "Dirichlet", "laplace": "Laplace",
@@ -1189,9 +1189,18 @@ def plot_sweep_lr(trials, sweeps, out_path=None):
 _SETTING = ["n_nodes", "in_degree", "alpha", "sample_size", "dag_idx"]
 
 
-def plot_estimators_by_k(df, estimators, param_nodes=20, out_path=None):
-    """(a) KL and (b) free parameters vs in-degree, one line per estimator, on
-    the settings every estimator was run on."""
+def _dag_mean_se(sub, x):
+    """Mean KL at each x and its standard error across DAGs: each DAG's KL is
+    first averaged over the other settings (e.g. sample sizes)."""
+    per_dag = sub.groupby([x, "n_nodes", "dag_idx"]).kl.mean().groupby(level=0)
+    return per_dag.mean(), per_dag.sem()
+
+
+def plot_estimators_by_k(df, estimators, param_nodes=20, kl_nodes=None, out_path=None):
+    """(a) KL (mean +- s.e. across DAGs) and (b) free parameters vs in-degree,
+    one line per estimator, on the settings every estimator was run on.
+    kl_nodes: the network size the KL panel uses (None = all sizes pooled); the
+    parameter panel uses param_nodes."""
     sub = df[df.estimator.isin(estimators)]
     shared = sub.groupby(_SETTING).estimator.nunique()
     shared = shared[shared == len(estimators)].reset_index()[_SETTING]
@@ -1200,11 +1209,13 @@ def plot_estimators_by_k(df, estimators, param_nodes=20, out_path=None):
         fig, axs = plt.subplots(1, 2, figsize=(DOUBLE_W, 1.95))
         for i, e in enumerate(estimators):
             c, fmt, lab = _est_style(e, i)
-            q = sub[sub.estimator == e].groupby("in_degree").kl.mean()
-            axs[0].plot(q.index, q, fmt, color=c, label=lab)
+            kl_sub = sub if kl_nodes is None else sub[sub.n_nodes == kl_nodes]
+            q, se = _dag_mean_se(kl_sub[kl_sub.estimator == e], "in_degree")
+            axs[0].errorbar(q.index, q, yerr=se, fmt=fmt, color=c, label=lab, ms=4.5, capsize=1.5, elinewidth=0.6)
             p = sub[(sub.estimator == e) & (sub.n_nodes == param_nodes)].groupby("in_degree").free_params.mean()
-            axs[1].plot(p.index, p, fmt, color=c)
-        for a, t, yl in zip(axs, ["(a) KL divergence", f"(b) Free parameters ({param_nodes} nodes)"],
+            axs[1].plot(p.index, p, fmt, color=c, ms=4.5)
+        kl_title = "(a) KL divergence" + ("" if kl_nodes is None else f" ({kl_nodes} nodes)")
+        for a, t, yl in zip(axs, [kl_title, f"(b) Free parameters ({param_nodes} nodes)"],
                             ["KL divergence (nats)", "Free parameters"]):
             a.set_yscale("log"); a.set_xticks(sorted(sub.in_degree.unique()))
             a.set_xlabel("Parent in-degree $k$"); a.set_title(t, loc="left"); a.set_ylabel(yl)
@@ -1235,20 +1246,94 @@ def plot_structured(df, estimators, out_path=None):
 
 
 def plot_kl_vs_n(df, estimators, in_degrees=None, out_path=None):
-    """KL vs training rows, one panel per in-degree, one line per estimator."""
+    """KL (mean +- s.e. across DAGs) vs training rows, one panel per in-degree,
+    one line per estimator."""
     in_degrees = in_degrees or sorted(df.in_degree.unique())
     with plt.rc_context(REPORT_RC):
         fig, axs = plt.subplots(1, len(in_degrees), figsize=(DOUBLE_W, 1.75), squeeze=False)
         for ax, k in zip(axs[0], in_degrees):
             for i, e in enumerate(estimators):
                 c, fmt, lab = _est_style(e, i)
-                q = df[(df.estimator == e) & (df.in_degree == k)].groupby("sample_size").kl.mean()
-                ax.plot(q.index, q, fmt, color=c, label=lab)
+                q, se = _dag_mean_se(df[(df.estimator == e) & (df.in_degree == k)], "sample_size")
+                ax.errorbar(q.index, q, yerr=se, fmt=fmt, color=c, label=lab, capsize=1.5, elinewidth=0.6)
             ax.set_yscale("log"); ax.set_xticks(sorted(df.sample_size.unique()))
             ax.set_title(f"$k={k}$", loc="left"); ax.set_xlabel("Training rows $N$")
         axs[0, 0].set_ylabel("KL divergence (nats)")
         _legend_top(fig, axs[0, 0], len(estimators), 1.1)
         return _save(fig, out_path)
+
+
+def plot_kl_vs_n_by_size(df, estimators, sizes, in_degrees=None, out_path=None):
+    """KL vs training rows, one row of panels per network size and one column per
+    in-degree: whether the ordering of the estimators depends on network size."""
+    in_degrees = in_degrees or sorted(df.in_degree.unique())
+    with plt.rc_context(REPORT_RC):
+        fig, axs = plt.subplots(len(sizes), len(in_degrees), figsize=(DOUBLE_W, 1.45 * len(sizes)), squeeze=False)
+        for r, n in enumerate(sizes):
+            for ax, k in zip(axs[r], in_degrees):
+                sub = df[(df.n_nodes == n) & (df.in_degree == k)]
+                for i, e in enumerate(estimators):
+                    c, fmt, lab = _est_style(e, i)
+                    q = sub[sub.estimator == e].groupby("sample_size").kl.mean()
+                    ax.plot(q.index, q, fmt, color=c, label=lab)
+                ax.set_yscale("log"); ax.set_xticks(sorted(df.sample_size.unique()))
+                ax.tick_params(labelsize=6)
+                if r == 0:
+                    ax.set_title(f"$k={k}$", loc="left")
+                if r == len(sizes) - 1:
+                    ax.set_xlabel("Training rows $N$")
+            axs[r, 0].set_ylabel(f"{n} nodes\nKL (nats)")
+        _legend_top(fig, axs[0, 0], len(estimators), 1.0 + 0.08 / len(sizes) * 4)
+        return _save(fig, out_path)
+
+
+def rows_to_reach(df, estimators, threshold=5.0):
+    """Training rows each estimator needs for its mean KL divergence to fall to
+    `threshold` nats, by linear interpolation between the sample sizes run;
+    "<N_min" if already reached at the smallest, ">N_max" if never reached.
+    -> DataFrame, in-degree x estimator."""
+    m = df.groupby(["estimator", "in_degree", "sample_size"]).kl.mean()
+    out = {}
+    for e in estimators:
+        col = {}
+        for k, s in m[e].groupby(level="in_degree"):
+            s = s.droplevel("in_degree").sort_index()
+            if s.iloc[0] <= threshold:
+                col[k] = f"<{s.index[0]}"
+                continue
+            col[k] = f">{s.index[-1]}"
+            for (n0, k0), (n1, k1) in zip(s.items(), list(s.items())[1:]):
+                if k1 <= threshold:
+                    col[k] = f"{n0 + (k0 - threshold) / (k0 - k1) * (n1 - n0):.0f}"
+                    break
+        out[e] = col
+    return pd.DataFrame(out).rename_axis("in_degree")
+
+
+def rows_to_match(res, estimator, reference="dirichlet", sample_sizes=None):
+    """Real data: training rows `reference` needs for its mean test log-likelihood
+    to reach `estimator`'s at each N, interpolated on log N between the sample
+    sizes run; "<N_min" if reached at the smallest, ">N_max" if never reached.
+    -> DataFrame, (discretisation, DAG) x the estimator's N."""
+    m = res.groupby(["estimator", "disc_level", "dag_level", "sample_size"]).loglik.mean()
+    out = {}
+    for (dl, gl), ref in m[reference].groupby(level=["disc_level", "dag_level"]):
+        ref = ref.droplevel(["disc_level", "dag_level"]).sort_index()
+        est = m[estimator][dl][gl].sort_index()
+        row = {}
+        for n, target in est.items():
+            if sample_sizes is not None and n not in sample_sizes:
+                continue
+            if ref.iloc[0] >= target:
+                row[n] = f"<{ref.index[0]}"
+                continue
+            row[n] = f">{ref.index[-1]}"
+            for (n0, l0), (n1, l1) in zip(ref.items(), list(ref.items())[1:]):
+                if l1 >= target:
+                    row[n] = f"{np.exp(np.log(n0) + (target - l0) / (l1 - l0) * np.log(n1 / n0)):.0f}"
+                    break
+        out[(dl, gl)] = row
+    return pd.DataFrame(out).T.rename_axis(["disc_level", "dag_level"])
 
 
 def plot_size_alpha(df, estimators, out_path=None):
