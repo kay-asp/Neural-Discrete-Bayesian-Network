@@ -11,3 +11,7 @@ report/REVIEW.md
 # overnight run logs and result backups
 logs/
 *.bak-*
+
+# PDFs and the report's LaTeX sources (local only)
+*.pdf
+report/*.tex
