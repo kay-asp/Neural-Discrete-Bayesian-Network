@@ -21,13 +21,14 @@ def cpd_probs(cpd, test_data):
     return values[:, idx].T
 
 
-def kl_calculation(true_model, test_data, q_probs, return_nodes=False):
+def kl_calculation(true_model, test_data, q_probs, return_nodes=False, eps=EPS):
     """MC estimate of D_KL(P* || Q), decomposed by node.
 
     q_probs : (node, test_data) -> (N, card) array of Q(X_i | pa_i) per row.
     Returns (total, se), plus, with return_nodes=True, node -> [conditional KL
     term, number of parents]: each node's term in the chain-rule decomposition
-    (the terms sum to the total).
+    (the terms sum to the total). eps : floor on Q, so a zero probability where
+    P* is positive (unsmoothed MLE) costs log(1/eps) rather than infinity.
     """
     rows = np.zeros(len(test_data))
     nodes = {}
@@ -40,7 +41,7 @@ def kl_calculation(true_model, test_data, q_probs, return_nodes=False):
         if np.isnan(q).any():
             raise ValueError(f"Q has NaN for node {node} (unseen parent config?)")
 
-        k = (p * (np.log(np.clip(p, EPS, None)) - np.log(np.clip(q, EPS, None)))).sum(axis=1)
+        k = (p * (np.log(np.clip(p, EPS, None)) - np.log(np.clip(q, eps, None)))).sum(axis=1)
         rows += k
         nodes[node] = [float(k.mean()), len(cpd.variables) - 1]
 
@@ -48,11 +49,11 @@ def kl_calculation(true_model, test_data, q_probs, return_nodes=False):
     out = (float(rows.mean()), float(rows.std(ddof=1) / np.sqrt(n)))
     return out + (nodes,) if return_nodes else out
 
-def kl_mle(true_model, mle_model, test_data, return_nodes=False):
+def kl_mle(true_model, mle_model, test_data, return_nodes=False, eps=EPS):
     return kl_calculation(
         true_model, test_data,
         q_probs=lambda node, td: cpd_probs(mle_model.get_cpds(node), td),
-        return_nodes=return_nodes,
+        return_nodes=return_nodes, eps=eps,
     )
 
 

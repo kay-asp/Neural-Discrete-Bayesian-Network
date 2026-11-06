@@ -1159,8 +1159,8 @@ def plot_no_es(hist_dir, archs=("nn_32", "nn_64_32", "nn_128_64"), k=10, n=600, 
         return _save(fig, out_path)
 
 
-def plot_sweep_lr(trials, sweeps, out_path=None):
-    """Mean KL vs learning rate per sweep trial, coloured and marked by hidden layers.
+def plot_sweep_lr(trials, sweeps, metric="val_loss", out_path=None):
+    """Mean `metric` (the selection score, validation loss by default) vs learning rate per sweep trial, coloured and marked by hidden layers.
 
     sweeps : {in-degree: W&B sweep id}. Only runs scored on every cell of the
     sweep (all DAGs x sample sizes) are shown.
@@ -1174,14 +1174,14 @@ def plot_sweep_lr(trials, sweeps, out_path=None):
         fig, axs = plt.subplots(1, len(sweeps), figsize=(DOUBLE_W, 1.8), squeeze=False)
         for ax, (k, sid) in zip(axs[0], sweeps.items()):
             g = (t[t.sweep_id == sid].groupby("run_id")
-                 .agg(lr=("lr", "first"), hd=("hidden_dims", "first"), kl=("kl", "mean"), n=("kl", "size")))
+                 .agg(lr=("lr", "first"), hd=("hidden_dims", "first"), y=(metric, "mean"), n=(metric, "size")))
             g = g[g.n == g.n.max()]
             for i, ((mk, _), hd) in enumerate(zip(_styles(len(hds)), hds)):
                 q = g[g.hd == hd]
-                ax.scatter(q.lr, q.kl, s=9, color=_PALETTE[i % len(_PALETTE)], marker=mk, alpha=.8, lw=0,
+                ax.scatter(q.lr, q.y, s=9, color=_PALETTE[i % len(_PALETTE)], marker=mk, alpha=.8, lw=0,
                            label=str(hd).strip("[]()").replace(", ", "-").rstrip(","))
             ax.set_xscale("log"); ax.set_title(f"$k={k}$", loc="left"); ax.set_xlabel("Learning rate")
-        axs[0, 0].set_ylabel("Mean KL (tuning DAGs)")
+        axs[0, 0].set_ylabel({"val_loss": "Mean validation loss", "kl": "Mean KL"}.get(metric, metric) + " (tuning DAGs)")
         _legend_top(fig, axs[0, 0], 4, 1.1)
         return _save(fig, out_path)
 
