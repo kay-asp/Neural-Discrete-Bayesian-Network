@@ -650,6 +650,30 @@ def select_real_configs(tuning, metric="val_loglik", per_fold=None,
     return best.reset_index(drop=True)
 
 
+def _drop_stale(selection, path):
+    """Rows of the results file at `path` fitted with a config the selection no
+    longer picks (e.g. after the tuning grid grew) would be skipped on resume,
+    since resume matches on the family name. Back the file up and drop them so
+    they are refitted with the new winner."""
+    if not os.path.exists(path):
+        return
+    old = pd.read_csv(path, dtype={"n_train_spec": str})
+    if "selected_config" not in old:
+        return
+    keys = [c for c in ("disc_level", "dag_level", "n_train_spec", "fold") if c in selection]
+    sel = selection.rename(columns={"family": "estimator"})[keys + ["estimator", "selected_config"]]
+    if "fold" in keys:
+        old["fold"] = old["fold"].astype(int); sel = sel.assign(fold=sel["fold"].astype(int))
+    m = old.merge(sel, on=keys + ["estimator"], how="left", suffixes=("", "_now"))
+    stale = (m["selected_config_now"].notna() & (m["selected_config"] != m["selected_config_now"])).to_numpy()
+    if stale.any():
+        backup = f"{path}.bak-{pd.Timestamp.now():%Y%m%d-%H%M%S}"
+        os.replace(path, backup)
+        old[~stale].to_csv(path, index=False)
+        print(f"{stale.sum()} rows in {path} were fitted with configs the selection no longer "
+              f"picks; dropped so they are refitted (previous file kept as {backup})")
+
+
 def run_selected(raw_df, selection, candidates, **kwargs):
     """Refit each selected candidate and score it on the test sets, written
     under its family name with `selected_config` set. Same rows and seeds as
@@ -666,6 +690,7 @@ def run_selected(raw_df, selection, candidates, **kwargs):
     has_disc = "disc_level" in selection
     has_dag  = "dag_level" in selection
     has_n    = "n_train_spec" in selection
+    _drop_stale(selection, os.path.join(kwargs["results_dir"], kwargs.get("results_name", "results.csv")))
 
     if has_disc and has_dag and has_n:
         chosen = {}
@@ -674,18 +699,6 @@ def run_selected(raw_df, selection, candidates, **kwargs):
             key = (r.disc_level, r.dag_level, r.n_train_spec) + ((int(r.fold),) if per_fold else ())
             chosen.setdefault(key, []).append(
                 {**c, "name": c["family"], "selected_config": c["name"]})
-
-        path = os.path.join(kwargs["results_dir"], kwargs.get("results_name", "results.csv"))
-        old = pd.read_csv(path, dtype={"n_train_spec": str}) if os.path.exists(path) else None
-        if old is not None and "selected_config" in old:
-            sel = selection.rename(columns={"family": "estimator"})[
-                ["disc_level", "dag_level", "n_train_spec", "estimator", "selected_config"]]
-            m = old.merge(sel, on=["disc_level", "dag_level", "n_train_spec", "estimator"],
-                          suffixes=("", "_now"))
-            stale = m[m["selected_config"] != m["selected_config_now"]]
-            if len(stale):
-                print(f"WARNING: {len(stale)} rows in {path} are for configs the selection no "
-                      "longer picks and will be kept; delete them to refit with the new selection")
     else:
         estimators = []
         for r in selection.itertuples():

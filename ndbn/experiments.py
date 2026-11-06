@@ -402,6 +402,51 @@ def run_experiments(node_counts, in_degrees, alphas, n_dags, sample_sizes,
     progress_bar.close()
 
 
+MLE_FLOORS = (1e-12, 1e-8, 1e-6)
+
+
+def _mle_floor_job(job, sample_sizes, card, n_test, results_dir, floors):
+    """MLE's KL at every floor, for every sample size of one DAG -> records."""
+    n_nodes, in_deg, alpha, dag = job["n_nodes"], job["in_degree"], job["alpha"], job["dag"]
+    G, true_model, data, test_data = load_dag(results_dir, dag, in_deg, n_nodes, alpha,
+                                              card, max(sample_sizes), n_test)
+    records = []
+    for samples in sample_sizes:
+        # the same rows MLE is fitted on in the main grid (tabular fits use the whole sample)
+        model = fit_mle(G, data.iloc[:samples], card)
+        for eps in floors:
+            kl, se = kl_mle(true_model, model, test_data, eps=eps)
+            records.append({"n_nodes": n_nodes, "in_degree": in_deg, "alpha": alpha,
+                            "card": card, "dag_idx": dag, "sample_size": samples,
+                            "floor": eps, "kl": kl, "kl_se": se})
+    return records
+
+
+def run_mle_floor_check(node_counts, in_degrees, alphas, n_dags, sample_sizes, card,
+                        n_test, results_dir, results_name="results_mle_floor.csv",
+                        floors=MLE_FLOORS, n_jobs=1):
+    """Refit MLE on the main grid's cached data and record its KL with zero
+    probabilities floored at each of `floors`: how much MLE's divergence, and
+    its ranking against the other estimators, depends on the floor.
+    Resumable: DAGs already in <results_dir>/<results_name> (for this card)
+    are skipped. Tabular tables at r=4 with in-degree 8-10 are large: keep
+    n_jobs small there."""
+    results_csv = os.path.join(results_dir, results_name)
+    done = set()
+    if os.path.exists(results_csv):
+        old = pd.read_csv(results_csv)
+        done = set(map(tuple, old[old.card == card][["n_nodes", "in_degree", "alpha", "dag_idx"]]
+                       .drop_duplicates().to_numpy().tolist()))
+    jobs = [{"n_nodes": n, "in_degree": k, "alpha": a, "dag": d}
+            for n in node_counts for k in in_degrees for a in alphas
+            for d in range(1, n_dags + 1) if (n, k, a, d) not in done]
+    run_job = partial(_mle_floor_job, sample_sizes=sample_sizes, card=card, n_test=n_test,
+                      results_dir=results_dir, floors=floors)
+    for records in tqdm(_parallel_map(run_job, jobs, n_jobs), total=len(jobs), desc="DAGs"):
+        flush(records, results_csv)
+    return pd.read_csv(results_csv)
+
+
 def _run_sweep_job(job, card, val_frac, wandb_project, hist_dir, results_dir,
                    n_cached, n_test, n_jobs):
     """One sweep run (k, dag, sample size, arm) -> its sweep.csv row."""
