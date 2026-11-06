@@ -7,6 +7,7 @@ wandb/
 
 # review notes (local only)
 report/REVIEW.md
+report/HANDOFF.md
 
 # overnight run logs and result backups
 logs/

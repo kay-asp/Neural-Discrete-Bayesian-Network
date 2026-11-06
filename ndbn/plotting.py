@@ -1088,21 +1088,85 @@ def _with_card(df):
     return df.assign(card=df["card"].fillna(2) if "card" in df else 2)
 
 
+def plot_neural_cpd_diagram(out_path=None):
+    """Schematic of one node X with parents A (2 states) and B (3 states):
+    (a) its CPT, one row per parent configuration, each estimated from its own
+    rows (an unseen configuration stays uniform); (b) the neural CPD, which maps
+    the concatenated one-hot parents through a ReLU layer to a softmax over X."""
+    from matplotlib.patches import Rectangle
+    ink, faint, accent = "#222222", "#9a9a9a", "#2563eb"
+    with plt.rc_context(REPORT_RC):
+        fig, (ta, nb) = plt.subplots(2, 1, figsize=(SINGLE_W, 3.3), gridspec_kw={"height_ratios": [1, 1.05]})
+        for ax in (ta, nb):
+            ax.set_xlim(0, 10); ax.set_axis_off()
+
+        # (a) the CPT
+        ta.set_ylim(0, 7.6)
+        ta.set_title("(a) Conditional probability table", loc="left")
+        rows = [(0, 0, ".81", ".19"), (0, 1, ".64", ".36"), (0, 2, ".50", ".50"),
+                (1, 0, ".27", ".73"), (1, 1, ".12", ".88"), (1, 2, ".33", ".67")]
+        cols = [0.5, 1.25, 2.5, 4.05]
+        y0, dy = 6.6, 0.95
+        for x, h in zip(cols, ["$A$", "$B$", "$P(X{=}0)$", "$P(X{=}1)$"]):
+            ta.text(x, y0, h, ha="center", va="center")
+        ta.plot([0.1, 4.75], [y0 - 0.5, y0 - 0.5], color=ink, lw=0.6)
+        for i, (a, b, p0, p1) in enumerate(rows):
+            y = y0 - 1 - i * dy
+            unseen = (a, b) == (0, 2)
+            if unseen:
+                ta.add_patch(Rectangle((0.1, y - dy / 2), 4.65, dy, color="#e5e5e5", lw=0))
+            for x, t in zip(cols, [a, b, p0, p1]):
+                ta.text(x, y, str(t), ha="center", va="center", color=faint if unseen else ink)
+        ta.text(5.3, 5.6, "One row per parent\nconfiguration: $r^k$ rows\nfor $k$ parents", va="center", fontsize=7, linespacing=1.1)
+        ta.text(5.3, 2.4, "Each row is estimated\nfrom its own counts; a\nrow with no data (grey)\nstays uniform", va="center", fontsize=7, linespacing=1.1)
+
+        # (b) the neural CPD
+        nb.set_ylim(-0.7, 7.6)
+        nb.set_title("(b) Neural CPD", loc="left")
+        inp = [6.1, 5.1, 3.8, 2.8, 1.8]                      # A: 2 units, B: 3 units
+        bits = [0, 1, 0, 0, 1]                                # A = 1, B = 2
+        hid = [6.0, 4.7, 3.4, 2.1]
+        out = [4.75, 3.35]
+        xi, xh, xo = 2.3, 5.0, 7.6
+        for yi in inp:
+            for yh in hid:
+                nb.plot([xi + 0.3, xh - 0.17], [yi, yh], color=faint, lw=0.4, zorder=1)
+        for yh in hid:
+            for yo in out:
+                nb.plot([xh + 0.17, xo - 0.3], [yh, yo], color=faint, lw=0.4, zorder=1)
+        for yi, bit in zip(inp, bits):
+            nb.add_patch(Rectangle((xi - 0.3, yi - 0.4), 0.6, 0.8, facecolor=accent if bit else "white",
+                                   edgecolor=ink, lw=0.6, zorder=2))
+            nb.text(xi, yi, str(bit), ha="center", va="center", color="white" if bit else ink, zorder=3, fontsize=7)
+        nb.text(xi - 0.55, 5.6, "$A{=}1$", ha="right", va="center")
+        nb.text(xi - 0.55, 2.8, "$B{=}2$", ha="right", va="center")
+        nb.plot([xh] * len(hid), hid, "o", ms=8, mfc="white", mec=ink, mew=0.6, zorder=2)   # markers stay round
+        for yo, lab in zip(out, ["$X{=}0$", "$X{=}1$"]):
+            nb.add_patch(Rectangle((xo - 0.3, yo - 0.4), 0.6, 0.8, facecolor="white", edgecolor=ink, lw=0.6, zorder=2))
+            nb.text(xo + 0.5, yo, lab, va="center")
+        nb.text(xi, 0.1, "One-hot parents,\nconcatenated", ha="center", va="center", fontsize=7, linespacing=1.1)
+        nb.text(xh, 0.1, "Hidden layer\n(ReLU)", ha="center", va="center", fontsize=7, linespacing=1.1)
+        nb.text(xo, 0.1, "Softmax:\n$P(X \\mid A, B)$", ha="center", va="center", fontsize=7, linespacing=1.1)
+        return _save(fig, out_path)
+
+
 def plot_mle_fails(df, estimators=("mle",), sample_size=1000, alpha=0.5,
-                   ks=None, out_path=None):
+                   ks=None, logy=None, out_path=None):
     """KL vs in-degree for each tabular estimator, then CPT memory (the same for
-    all of them), one line per network size, stacked. With more than one
-    estimator the KL panels share a log y-axis so they compare directly."""
+    all of them), one line per network size, side by side (a full-width figure).
+    logy : log KL axes shared across the estimators (default with more than one
+    estimator, so they compare directly); False draws each KL panel on its own
+    linear axis, which shows the shape of the rise rather than the ratio."""
     if isinstance(estimators, str):
         estimators = (estimators,)
     m = df[df.estimator.isin(estimators) & (df.sample_size == sample_size) & (df.alpha == alpha)]
     nodes = sorted(m.n_nodes.unique())
-    logy = len(estimators) > 1
+    logy = len(estimators) > 1 if logy is None else logy
     n_ax = len(estimators) + 1
     with plt.rc_context(REPORT_RC):
-        fig, ax = plt.subplots(n_ax, 1, figsize=(SINGLE_W, 1.8 * n_ax), sharex=True)
+        fig, ax = plt.subplots(1, n_ax, figsize=(DOUBLE_W, 1.9))
         for j, e in enumerate(estimators):
-            if j:
+            if j and logy:
                 ax[j].sharey(ax[0])
             me = m[m.estimator == e]
             for i, ((mk, ls), n) in enumerate(zip(_styles(len(nodes)), nodes)):
@@ -1117,12 +1181,13 @@ def plot_mle_fails(df, estimators=("mle",), sample_size=1000, alpha=0.5,
             else:
                 ax[j].set_ylim(bottom=0)
         ax[-1].set_ylim(bottom=0); ax[-1].set_ylabel("CPT memory (KB)")
-        titles = [f"({chr(97 + j)}) KL divergence: {_est_style(e)[2]}" if logy else "(a) KL divergence"
+        titles = [f"({chr(97 + j)}) KL divergence: {_est_style(e)[2]}" if len(estimators) > 1 else "(a) KL divergence"
                   for j, e in enumerate(estimators)] + [f"({chr(97 + len(estimators))}) CPT memory"]
         for a, t in zip(ax, titles):
             a.set_xticks(ks or sorted(m.in_degree.unique())); a.set_title(t, loc="left")
-        ax[-1].set_xlabel("Parent in-degree $k$")
-        _legend_top(fig, ax[0], 3, 1.0 + 0.07 * 3 / n_ax)
+        for a in ax:
+            a.set_xlabel("Parent in-degree $k$")
+        _legend_top(fig, ax[0], len(nodes), 1.1)
         return _save(fig, out_path)
 
 
@@ -1189,18 +1254,12 @@ def plot_sweep_lr(trials, sweeps, metric="val_loss", out_path=None):
 _SETTING = ["n_nodes", "in_degree", "alpha", "sample_size", "dag_idx"]
 
 
-def _dag_mean_se(sub, x):
-    """Mean KL at each x and its standard error across DAGs: each DAG's KL is
-    first averaged over the other settings (e.g. sample sizes)."""
-    per_dag = sub.groupby([x, "n_nodes", "dag_idx"]).kl.mean().groupby(level=0)
-    return per_dag.mean(), per_dag.sem()
-
-
 def plot_estimators_by_k(df, estimators, param_nodes=20, kl_nodes=None, out_path=None):
-    """(a) KL (mean +- s.e. across DAGs) and (b) free parameters vs in-degree,
-    one line per estimator, on the settings every estimator was run on.
-    kl_nodes: the network size the KL panel uses (None = all sizes pooled); the
-    parameter panel uses param_nodes."""
+    """(a) KL and (b) free parameters vs in-degree, one line per estimator, on
+    the settings every estimator was run on. kl_nodes: the network size the KL
+    panel uses (None = all sizes pooled); the parameter panel uses param_nodes.
+    No error bars: the standard errors across DAGs are smaller than the markers,
+    so the captions report their range instead."""
     sub = df[df.estimator.isin(estimators)]
     shared = sub.groupby(_SETTING).estimator.nunique()
     shared = shared[shared == len(estimators)].reset_index()[_SETTING]
@@ -1210,8 +1269,8 @@ def plot_estimators_by_k(df, estimators, param_nodes=20, kl_nodes=None, out_path
         for i, e in enumerate(estimators):
             c, fmt, lab = _est_style(e, i)
             kl_sub = sub if kl_nodes is None else sub[sub.n_nodes == kl_nodes]
-            q, se = _dag_mean_se(kl_sub[kl_sub.estimator == e], "in_degree")
-            axs[0].errorbar(q.index, q, yerr=se, fmt=fmt, color=c, label=lab, ms=4.5, capsize=1.5, elinewidth=0.6)
+            q = kl_sub[kl_sub.estimator == e].groupby("in_degree").kl.mean()
+            axs[0].plot(q.index, q, fmt, color=c, label=lab, ms=4.5)
             p = sub[(sub.estimator == e) & (sub.n_nodes == param_nodes)].groupby("in_degree").free_params.mean()
             axs[1].plot(p.index, p, fmt, color=c, ms=4.5)
         kl_title = "(a) KL divergence" + ("" if kl_nodes is None else f" ({kl_nodes} nodes)")
@@ -1246,16 +1305,16 @@ def plot_structured(df, estimators, out_path=None):
 
 
 def plot_kl_vs_n(df, estimators, in_degrees=None, out_path=None):
-    """KL (mean +- s.e. across DAGs) vs training rows, one panel per in-degree,
-    one line per estimator."""
+    """KL vs training rows, one panel per in-degree, one line per estimator
+    (no error bars: see plot_estimators_by_k)."""
     in_degrees = in_degrees or sorted(df.in_degree.unique())
     with plt.rc_context(REPORT_RC):
         fig, axs = plt.subplots(1, len(in_degrees), figsize=(DOUBLE_W, 1.75), squeeze=False)
         for ax, k in zip(axs[0], in_degrees):
             for i, e in enumerate(estimators):
                 c, fmt, lab = _est_style(e, i)
-                q, se = _dag_mean_se(df[(df.estimator == e) & (df.in_degree == k)], "sample_size")
-                ax.errorbar(q.index, q, yerr=se, fmt=fmt, color=c, label=lab, capsize=1.5, elinewidth=0.6)
+                q = df[(df.estimator == e) & (df.in_degree == k)].groupby("sample_size").kl.mean()
+                ax.plot(q.index, q, fmt, color=c, label=lab)
             ax.set_yscale("log"); ax.set_xticks(sorted(df.sample_size.unique()))
             ax.set_title(f"$k={k}$", loc="left"); ax.set_xlabel("Training rows $N$")
         axs[0, 0].set_ylabel("KL divergence (nats)")
@@ -1373,7 +1432,7 @@ def with_full_indegree_kl(df):
 
 
 def plot_ratio_vs_rho(df, baselines=("mle", "dirichlet"), estimator="nn_32", n_nodes=None, alpha=0.5,
-                      out_path=None):
+                      logy=True, out_path=None):
     """KL(baseline) / KL(estimator) vs rows per parent configuration rho = N / r^k:
     one panel per baseline, one line per in-degree k joining its sample sizes,
     every cardinality in df on the same axes (r=2 solid with open markers, r=4
@@ -1417,10 +1476,14 @@ def plot_ratio_vs_rho(df, baselines=("mle", "dirichlet"), estimator="nn_32", n_n
                     ax.plot(s.rho, s[f"ratio_{b}"], ls=ls, marker=mk, color=c, lw=.9, ms=4,
                             mfc=c if filled else "white")
             ax.axhline(1, color="#999", lw=.6, ls=":")
-            ax.set_xscale("log"); ax.set_yscale("log")
-            ax.yaxis.set_major_locator(plt.FixedLocator([0.25, 0.5, 1, 2, 4, 8, 16]))
-            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:g}"))
-            ax.yaxis.set_minor_formatter(plt.NullFormatter())
+            ax.set_xscale("log")   # rho spans six orders of magnitude
+            if logy:
+                ax.set_yscale("log")
+                ax.yaxis.set_major_locator(plt.FixedLocator([0.25, 0.5, 1, 2, 4, 8, 16]))
+                ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:g}"))
+                ax.yaxis.set_minor_formatter(plt.NullFormatter())
+            else:
+                ax.set_ylim(bottom=0)
             ax.set_xlabel(r"Rows per parent configuration $\rho = N/r^{k}$")
             ax.set_ylabel(f"KL({_est_style(b)[2]}) / KL({lab})")
             ax.set_title(f"({t}) {_est_style(b)[2]} relative to {lab}", loc="left")
@@ -1481,8 +1544,7 @@ def plot_real_mean(res, estimators, err="std", out_path=None):
         return _save(fig, out_path)
 
 
-DIAG_METRICS = [("diag_auroc", "AUROC", "higher"), ("diag_brier", "Brier score", "lower"),
-                ("diag_logloss", "Log-loss (nats)", "lower")]
+DIAG_METRICS = [("diag_auroc", "AUROC", "higher"), ("diag_logloss", "Log-loss (nats)", "lower")]
 
 
 def plot_real_diagnosis(res, estimators, prevalence=None, err="std", out_path=None):
@@ -1493,12 +1555,13 @@ def plot_real_diagnosis(res, estimators, prevalence=None, err="std", out_path=No
     mean = res.groupby(["estimator", "sample_size", "fold"], as_index=False)[
         [m for m, _, _ in DIAG_METRICS]].mean()
     ref = None if prevalence is None else {
-        "diag_auroc": 0.5, "diag_brier": prevalence * (1 - prevalence),
+        "diag_auroc": 0.5,
         "diag_logloss": -(prevalence * np.log(prevalence) + (1 - prevalence) * np.log(1 - prevalence))}
     ns = sorted(mean.sample_size.unique())
     with plt.rc_context(REPORT_RC):
-        fig, axs = plt.subplots(1, len(DIAG_METRICS), figsize=(DOUBLE_W, 1.9))
-        for ax, (m, lab, better) in zip(axs, DIAG_METRICS):
+        # two metrics fit one column; panel titles stay short and the caption says which way is better
+        fig, axs = plt.subplots(1, len(DIAG_METRICS), figsize=(SINGLE_W, 2.0))
+        for ax, (m, lab, better), t in zip(axs, DIAG_METRICS, "abcdefgh"):
             for i, e in enumerate(estimators):
                 c, fmt, elab = _est_style(e, i)
                 q = mean[mean.estimator == e].groupby("sample_size")[m].agg(["mean", err])
@@ -1508,8 +1571,8 @@ def plot_real_diagnosis(res, estimators, prevalence=None, err="std", out_path=No
                 ax.axhline(ref[m], color="#999", lw=.7, ls=":", label="Prevalence only")
             ax.set_xscale("log"); ax.set_xlim(ns[0] / 1.5, ns[-1] * 1.6)
             ax.set_xticks(ns); ax.set_xticklabels([_n_label(n) for n in ns]); ax.minorticks_off()
-            ax.set_xlabel("Training rows $N$"); ax.set_title(f"{lab} ({better} is better)", loc="left")
-        _legend_top(fig, axs[0], len(estimators) + (ref is not None), 1.12)
+            ax.set_xlabel("Training rows $N$"); ax.set_title(f"({t}) {lab}", loc="left")
+        _legend_top(fig, axs[0], 2, 1.16)
         return _save(fig, out_path)
 
 

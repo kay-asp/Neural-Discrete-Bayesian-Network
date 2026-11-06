@@ -53,6 +53,11 @@ alone. Tabular fits at r = 4 with in-degree 8–10 build very large tables, so r
 (`ndbn.generation.make_seed`), so reruns reproduce the data and splits exactly. Network fits can differ
 slightly across PyTorch versions.
 
+Each results row records `code_version`, the git commit it was produced with (`+dirty`: uncommitted changes).
+The experiments ran in stages, so the files mix several versions of the same code, but this does not change the
+results: all seeds match the current code, MLE rows reproduce exactly, and network rows reproduce to within
+about 2%, consistent with differences between PyTorch builds.
+
 ## Data
 
 - **CDC Diabetes Health Indicators**: UCI Machine Learning Repository, dataset 891
