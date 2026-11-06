@@ -1,0 +1,77 @@
+digraph {
+	graph [dpi=300 rankdir=TB]
+	node [fontsize=10 shape=box style=rounded]
+	edge [arrowsize=0.7]
+	HvyAlcoholConsump
+	PhysHlth
+	Sex
+	Diabetes_binary
+	HighBP
+	Income
+	Age
+	GenHlth
+	BMI
+	PhysActivity
+	DiffWalk
+	MentHlth
+	AnyHealthcare
+	NoDocbcCost
+	CholCheck
+	HeartDiseaseorAttack
+	HighChol
+	Stroke
+	Fruits
+	Veggies
+	Education
+	Smoker
+	HvyAlcoholConsump -> PhysHlth [color=black]
+	HvyAlcoholConsump -> MentHlth [color=black]
+	HvyAlcoholConsump -> GenHlth [color=black]
+	HvyAlcoholConsump -> HighBP [color=red]
+	HvyAlcoholConsump -> HeartDiseaseorAttack [color=red]
+	HvyAlcoholConsump -> HighChol [color=red]
+	HvyAlcoholConsump -> Stroke [color=red]
+	PhysHlth -> MentHlth [color=black]
+	PhysHlth -> HighBP [color=black]
+	PhysHlth -> HighChol [color=black]
+	Sex -> Diabetes_binary [color=black]
+	Sex -> HighBP [color=red]
+	Sex -> Income [color=red]
+	Diabetes_binary -> DiffWalk [color=black]
+	HighBP -> HeartDiseaseorAttack [color=black]
+	HighBP -> Stroke [color=black]
+	HighBP -> Diabetes_binary [color=black]
+	Income -> GenHlth [color=black]
+	Income -> MentHlth [color=black]
+	Income -> PhysHlth [color=black]
+	Income -> AnyHealthcare [color=black]
+	Income -> NoDocbcCost [color=black]
+	Income -> CholCheck [color=black]
+	Age -> Income [color=black]
+	Age -> GenHlth [color=black]
+	Age -> Diabetes_binary [color=black]
+	Age -> BMI [color=black]
+	Age -> PhysActivity [color=black]
+	Age -> DiffWalk [color=black]
+	Age -> PhysHlth [color=black]
+	Age -> HighBP [color=red]
+	GenHlth -> Diabetes_binary [color=black]
+	GenHlth -> MentHlth [color=black]
+	BMI -> Diabetes_binary [color=black]
+	BMI -> HighBP [color=black]
+	BMI -> HeartDiseaseorAttack [color=red]
+	PhysActivity -> Diabetes_binary [color=black]
+	PhysActivity -> HighChol [color=black]
+	PhysActivity -> HighBP [color=black]
+	AnyHealthcare -> NoDocbcCost [color=black]
+	AnyHealthcare -> CholCheck [color=black]
+	HeartDiseaseorAttack -> Stroke [color=black]
+	HighChol -> HeartDiseaseorAttack [color=black]
+	HighChol -> Diabetes_binary [color=black]
+	Fruits -> GenHlth [color=red]
+	Veggies -> GenHlth [color=red]
+	Education -> Income [color=black]
+	Education -> GenHlth [color=red]
+	Education -> Diabetes_binary [color=red]
+	Smoker -> HeartDiseaseorAttack [color=red]
+}
