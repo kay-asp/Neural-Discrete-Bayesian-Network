@@ -85,16 +85,18 @@ def _decile_edges(x):
     return list(np.unique(np.quantile(x, np.linspace(0.1, 0.9, 9))))
 
 
-def discretise(df, level):
+def discretise(df, level, fit_rows=None):
     """Raw table -> (integer codes 0..r-1 as int8, Cards).
 
-    "deciles" edges are taken from `df` itself: pass the full table, not a
-    training subset, so every fold shares the same bins.
+    "deciles" edges are taken from the rows `fit_rows` (positions; default all
+    of `df`). The experiments pass each fold's training rows, so no test row
+    shapes the bins; the default is for describing the data.
     """
     spec = DISCRETISATIONS[level]
     missing = set(df.columns) ^ set(spec)
     if missing:
         raise ValueError(f"discretisation {level} and data columns differ: {sorted(missing)}")
+    fit = df if fit_rows is None else df.iloc[fit_rows]
     out, cards = {}, Cards()
     for col in df.columns:
         x = df[col].to_numpy()
@@ -105,7 +107,7 @@ def discretise(df, level):
                 raise ValueError(f"{col}: values outside native range {lo}..{hi}")
             codes, cards[col] = x - lo, hi - lo + 1
         else:
-            edges = _decile_edges(x) if rule == "deciles" else rule
+            edges = _decile_edges(fit[col].to_numpy()) if rule == "deciles" else rule
             codes, cards[col] = np.digitize(x, edges), len(edges) + 1
         out[col] = codes.astype(np.int8)
     return pd.DataFrame(out, index=df.index), cards
@@ -433,13 +435,14 @@ def chosen_estimators(path, names=None):
     return [{"type": "nn", "family": c["name"], **c} for c in configs]
 
 
-def _real_job(job, data_by_level, dags, cards_by_level, folds, estimators, n_train,
+def _real_job(job, dags, folds, estimators, n_train,
               nn_max_n, val_frac, n_epochs, seed, n_jobs, blocks=None,
               split_fracs=(0.6, 0.2, 0.2), score_test=True):
     """Every (N, estimator) still to do for one (discretisation, DAG, fold or
-    repeat). score_test=False (tuning) computes no test-set quantity at all."""
+    repeat), on job["data"]: the table discretised with that fold's bins.
+    score_test=False (tuning) computes no test-set quantity at all."""
     disc, dag_level, fold = job["disc_level"], job["dag_level"], job["fold"]
-    data, G, cards = data_by_level[disc], dags[dag_level], cards_by_level[disc]
+    data, G, cards = job["data"], dags[dag_level], job["cards"]
 
     records = []
     for n in n_train:
@@ -550,9 +553,6 @@ def run_real_experiments(raw_df, disc_levels, dag_paths, estimators, n_train, k_
         done = set(map(tuple, old[KEYS].astype(str).to_numpy()))
 
     columns = list(raw_df.columns)
-    data_by_level, cards_by_level = {}, {}
-    for lvl in disc_levels:
-        data_by_level[lvl], cards_by_level[lvl] = discretise(raw_df, lvl)
     dags = {lvl: load_bayesys_dag(p, columns) for lvl, p in dag_paths.items()}
     target = raw_df[TARGET].to_numpy()
     if split == "kfold":
@@ -564,6 +564,13 @@ def run_real_experiments(raw_df, disc_levels, dag_paths, estimators, n_train, k_
     else:
         raise ValueError(f"unknown split {split!r}")
     folds_to_run = range(n_units) if folds_to_run is None else folds_to_run
+
+    def fit_rows(unit):
+        """Rows the bins are computed from: the fold's (or repeat's) training rows."""
+        if folds is not None:
+            return folds[unit][0]
+        return np.concatenate([blocks[unit]["train"], blocks[unit]["val"]])
+    discretised = {}
 
     def wanted(est, n):
         if "n_values" in est and n not in est["n_values"]:     # e.g. a sensitivity check
@@ -580,13 +587,15 @@ def run_real_experiments(raw_df, disc_levels, dag_paths, estimators, n_train, k_
                         if wanted(e, n) and
                         (disc, dag_level, str(fold), n_spec(n), e["name"]) not in done}
                 if todo:
+                    if (disc, fold) not in discretised:
+                        discretised[(disc, fold)] = discretise(raw_df, disc, fit_rows(fold))
+                    data, cards = discretised[(disc, fold)]
                     jobs.append({"disc_level": disc, "dag_level": dag_level,
-                                 "fold": fold, "todo": todo})
+                                 "fold": fold, "todo": todo, "data": data, "cards": cards})
                 elif verbose:
                     tqdm.write(f"loaded results: {disc} {dag_level} fold {fold}")
 
-    run_job = partial(_real_job, data_by_level=data_by_level, dags=dags,
-                      cards_by_level=cards_by_level, folds=folds, estimators=estimators,
+    run_job = partial(_real_job, dags=dags, folds=folds, estimators=estimators,
                       n_train=n_train, nn_max_n=nn_max_n, val_frac=val_frac,
                       n_epochs=n_epochs, seed=seed, n_jobs=n_jobs, blocks=blocks,
                       split_fracs=split_fracs, score_test=score_test)
