@@ -3,7 +3,8 @@
 Honours research project (University of the Witwatersrand). Each conditional probability table (CPT) of a
 discrete Bayesian network is replaced by a small neural network, a *neural CPD*. Neural CPDs are compared with
 maximum likelihood (MLE) and Dirichlet-smoothed CPTs on synthetic networks and on the CDC Diabetes Health
-Indicators data with expert-elicited DAGs. The report is in `report/main.tex` and `report/supplementary.tex`.
+Indicators data with expert-elicited DAGs. The report's LaTeX source is not part of this repository; the
+notebooks produce every figure, table and number in it.
 
 ## Setup
 
@@ -24,9 +25,10 @@ an account.
 | `ndbn/` | Package: `generation` (random DAGs, Dirichlet CPTs, seeds), `mle` (MLE / Dirichlet CPTs), `models` and `training` (neural CPDs), `evaluation` (KL divergence, parameter counts), `experiments` (synthetic runs and sweeps), `real_data` (CDC data, cross-validation, tuning, diagnosis), `plotting` |
 | `1_setup_and_checks.ipynb` … `4_real_data.ipynb` | The experiments, run in order |
 | `results-tuning/` | Sweep trials (`hparam_trials.csv`), the chosen network configs (`chosen_nn_c2.json`, `chosen_nn_c4.json`) and tuning-DAG data |
-| `results-synthetic/` | `results.csv` (every synthetic fit) and the cached train/test samples |
+| `results-synthetic/` | `results.csv` (every synthetic fit), the cached train/test samples, and `alphas.csv` (the earlier run over Dirichlet α = 0.1, 0.5, 1.0 behind Supplementary Figure S3; its `source` column records where it came from) |
 | `results-realdata/` | Real-data results: fixed configs (`results_c4.csv`), tuning (`tuning.csv`, `selection.csv`), tuned configs (`results_tuned.csv`), serial timing, diagnosis |
 | `figs/` | Every report figure, written by the notebooks |
+| `report/tables/` | Created when notebooks 3 and 4 run: the supplementary's LaTeX tables (`synthetic_kl_r2.tex`, `real_loglik.tex`) |
 | `data/` | CDC data (downloaded on first use) and the expert DAGs |
 
 ## Reproducing the results
@@ -39,8 +41,8 @@ the figures from the saved CSVs.
 |---|---|---|
 | 1 | Smoke tests of the generators and estimators | nothing |
 | 2 | No-early-stopping diagnostic and Bayesian sweeps on separate tuning DAGs (`RUN_SWEEPS`); candidate comparison; final configs | `results-tuning/`, `figs/no_es.png`, `figs/sweep_c{2,4}.png` |
-| 3 | Main synthetic grid for r = 2 and r = 4 (resumable); report figures | `results-synthetic/results.csv`, `figs/{mle_fails,arms,kl_vs_N,size_alpha}_c{2,4}.png`, `figs/rho.png` |
-| 4 | Real data: 3-fold CV over 3 discretisations × 3 expert DAGs × 4 sample sizes (resumable); per-fold tuning (`RUN_TUNING`); diagnostic accuracy (`RUN_DIAGNOSIS`); report figures | `results-realdata/`, `figs/real_*.png`, `figs/dag_moderate.png` |
+| 3 | Main synthetic grid for r = 2 and r = 4 (resumable); report figures | `results-synthetic/results.csv`, `figs/{mle_fails,arms,kl_vs_N,size_alpha}_c{2,4}.png`, `figs/rho.png`, `figs/alpha_check.png` (from `alphas.csv`), `report/tables/synthetic_kl_r2.tex` |
+| 4 | Real data: 3-fold CV over 3 discretisations × 3 expert DAGs × 4 sample sizes (resumable); per-fold tuning (`RUN_TUNING`); diagnostic accuracy (`RUN_DIAGNOSIS`); report figures | `results-realdata/`, `figs/real_*.png`, `figs/dag_moderate.png`, `report/tables/real_loglik.tex` |
 
 `overnight.py` runs the follow-up experiments of notebook 3 in one go, one after another: the structured ground
 truth, the refit of the 11 Oct rows, per-node KL terms for the ρ figure (r=2, then optionally r=4) and a small serial

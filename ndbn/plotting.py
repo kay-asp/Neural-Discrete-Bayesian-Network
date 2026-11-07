@@ -7,6 +7,7 @@ which slice you're viewing.
 """
 
 import json
+import os
 
 import numpy as np
 import pandas as pd
@@ -1090,11 +1091,14 @@ def _with_card(df):
 
 def plot_neural_cpd_diagram(out_path=None):
     """Schematic of one node X with parents A (2 states) and B (3 states):
-    (a) its CPT, one row per parent configuration, each estimated from its own
-    rows (an unseen configuration stays uniform); (b) the neural CPD, which maps
-    the concatenated one-hot parents through a ReLU layer to a softmax over X."""
+    (a) X's place in the graph next to its CPT, one row per parent configuration,
+    each estimated from its own rows (an unseen configuration stays uniform);
+    (b) the neural CPD, which maps the concatenated one-hot parents through a
+    ReLU layer to a softmax over X. Parents are orange and X is blue in both
+    panels; the probabilities are illustrative."""
     from matplotlib.patches import Rectangle
     ink, faint, accent = "#222222", "#9a9a9a", "#2563eb"
+    par, par_l, chi_l = "#e07b39", "#fbe3d3", "#dbe6fb"   # parents; light parent / child tints
     with plt.rc_context(REPORT_RC):
         fig, (ta, nb) = plt.subplots(2, 1, figsize=(SINGLE_W, 3.3), gridspec_kw={"height_ratios": [1, 1.05]})
         for ax in (ta, nb):
@@ -1102,12 +1106,14 @@ def plot_neural_cpd_diagram(out_path=None):
 
         # (a) the CPT
         ta.set_ylim(0, 7.6)
-        ta.set_title("(a) Conditional probability table", loc="left")
+        ta.set_title("(a) Node $X$ in the graph, and its CPT", loc="left")
         rows = [(0, 0, ".81", ".19"), (0, 1, ".64", ".36"), (0, 2, ".50", ".50"),
                 (1, 0, ".27", ".73"), (1, 1, ".12", ".88"), (1, 2, ".33", ".67")]
         cols = [0.5, 1.25, 2.5, 4.05]
         y0, dy = 6.6, 0.95
-        for x, h in zip(cols, ["$A$", "$B$", "$P(X{=}0)$", "$P(X{=}1)$"]):
+        ta.add_patch(Rectangle((0.1, y0 - 0.5), 1.55, 1.0, color=par_l, lw=0))    # parent columns
+        ta.add_patch(Rectangle((1.7, y0 - 0.5), 3.05, 1.0, color=chi_l, lw=0))    # child columns
+        for x, h in zip(cols,["$A$", "$B$", "$P(X{=}0)$", "$P(X{=}1)$"]):
             ta.text(x, y0, h, ha="center", va="center")
         ta.plot([0.1, 4.75], [y0 - 0.5, y0 - 0.5], color=ink, lw=0.6)
         for i, (a, b, p0, p1) in enumerate(rows):
@@ -1117,8 +1123,15 @@ def plot_neural_cpd_diagram(out_path=None):
                 ta.add_patch(Rectangle((0.1, y - dy / 2), 4.65, dy, color="#e5e5e5", lw=0))
             for x, t in zip(cols, [a, b, p0, p1]):
                 ta.text(x, y, str(t), ha="center", va="center", color=faint if unseen else ink)
-        ta.text(5.3, 5.6, "One row per parent\nconfiguration: $r^k$ rows\nfor $k$ parents", va="center", fontsize=7, linespacing=1.1)
-        ta.text(5.3, 2.4, "Each row is estimated\nfrom its own counts; a\nrow with no data (grey)\nstays uniform", va="center", fontsize=7, linespacing=1.1)
+        # X's place in the graph: parents A and B, and a child C, which the neural CPD leaves unchanged
+        pos = {"A": (6.2, 6.1), "B": (8.8, 6.1), "X": (7.5, 3.6), "C": (7.5, 1.1)}
+        for u, v in [("A", "X"), ("B", "X"), ("X", "C")]:
+            ta.annotate("", xy=pos[v], xytext=pos[u],
+                        arrowprops=dict(arrowstyle="-|>", color=ink, lw=0.6, shrinkA=7, shrinkB=7, mutation_scale=6))
+        fill = {"A": par, "B": par, "X": accent, "C": "white"}
+        for n, (x, y) in pos.items():
+            ta.plot([x], [y], "o", ms=13, mfc=fill[n], mec=ink, mew=0.6, zorder=3)
+            ta.text(x, y, f"${n}$", ha="center", va="center", color=ink if n == "C" else "white", zorder=4)
 
         # (b) the neural CPD
         nb.set_ylim(-0.7, 7.6)
@@ -1135,14 +1148,14 @@ def plot_neural_cpd_diagram(out_path=None):
             for yo in out:
                 nb.plot([xh + 0.17, xo - 0.3], [yh, yo], color=faint, lw=0.4, zorder=1)
         for yi, bit in zip(inp, bits):
-            nb.add_patch(Rectangle((xi - 0.3, yi - 0.4), 0.6, 0.8, facecolor=accent if bit else "white",
+            nb.add_patch(Rectangle((xi - 0.3, yi - 0.4), 0.6, 0.8, facecolor=par if bit else "white",
                                    edgecolor=ink, lw=0.6, zorder=2))
             nb.text(xi, yi, str(bit), ha="center", va="center", color="white" if bit else ink, zorder=3, fontsize=7)
         nb.text(xi - 0.55, 5.6, "$A{=}1$", ha="right", va="center")
         nb.text(xi - 0.55, 2.8, "$B{=}2$", ha="right", va="center")
         nb.plot([xh] * len(hid), hid, "o", ms=8, mfc="white", mec=ink, mew=0.6, zorder=2)   # markers stay round
         for yo, lab in zip(out, ["$X{=}0$", "$X{=}1$"]):
-            nb.add_patch(Rectangle((xo - 0.3, yo - 0.4), 0.6, 0.8, facecolor="white", edgecolor=ink, lw=0.6, zorder=2))
+            nb.add_patch(Rectangle((xo - 0.3, yo - 0.4), 0.6, 0.8, facecolor=chi_l, edgecolor=ink, lw=0.6, zorder=2))
             nb.text(xo + 0.5, yo, lab, va="center")
         nb.text(xi, 0.1, "One-hot parents,\nconcatenated", ha="center", va="center", fontsize=7, linespacing=1.1)
         nb.text(xh, 0.1, "Hidden layer\n(ReLU)", ha="center", va="center", fontsize=7, linespacing=1.1)
@@ -1265,7 +1278,7 @@ def plot_estimators_by_k(df, estimators, param_nodes=20, kl_nodes=None, out_path
     shared = shared[shared == len(estimators)].reset_index()[_SETTING]
     sub = sub.merge(shared, on=_SETTING)
     with plt.rc_context(REPORT_RC):
-        fig, axs = plt.subplots(1, 2, figsize=(DOUBLE_W, 1.95))
+        fig, axs = plt.subplots(1, 2, figsize=(DOUBLE_W, 2.2))
         for i, e in enumerate(estimators):
             c, fmt, lab = _est_style(e, i)
             kl_sub = sub if kl_nodes is None else sub[sub.n_nodes == kl_nodes]
@@ -1278,30 +1291,50 @@ def plot_estimators_by_k(df, estimators, param_nodes=20, kl_nodes=None, out_path
                             ["KL divergence (nats)", "Free parameters"]):
             a.set_yscale("log"); a.set_xticks(sorted(sub.in_degree.unique()))
             a.set_xlabel("Parent in-degree $k$"); a.set_title(t, loc="left"); a.set_ylabel(yl)
-        _legend_top(fig, axs[0], len(estimators), 1.1)
+        # two legend rows: a single row of every estimator is wider than the figure
+        _legend_top(fig, axs[0], -(-len(estimators) // 2), 1.16)
         return _save(fig, out_path)
 
 
-def plot_structured(df, estimators, out_path=None):
+def plot_structured(df, estimators, independent=None, out_path=None):
     """Structured ground truth: mean KL divergence vs in-degree, one panel per
     interaction share (0 = additive logistic CPDs), one line per estimator,
-    averaged over sample sizes and DAGs."""
+    averaged over sample sizes and DAGs. independent: rows of the main
+    (independent Dirichlet columns) results on the same DAGs and sample sizes,
+    drawn first as the reference panel; estimators it lacks are skipped there."""
     levels = sorted(df.interaction.unique())
     titles = {0.0: "additive (no interactions)"}
+    panels = [(df[df.interaction == lam], titles.get(lam, f"interaction share {lam:g}")) for lam in levels]
+    if independent is not None:
+        panels = [(independent, "independent columns")] + panels
     with plt.rc_context(REPORT_RC):
-        fig, axs = plt.subplots(1, len(levels), figsize=(DOUBLE_W, 2.0), sharey=True, squeeze=False)
-        for ax, lam, t in zip(axs[0], levels, "abcdefgh"):
-            sub = df[df.interaction == lam]
+        fig, axs = plt.subplots(1, len(panels), figsize=(DOUBLE_W, 2.0), sharey=True, squeeze=False)
+        for ax, (sub, title), t in zip(axs[0], panels, "abcdefgh"):
             for i, e in enumerate(estimators):
                 c, fmt, lab = _est_style(e, i)
                 q = sub[sub.estimator == e].groupby("in_degree").kl.mean()
                 ax.plot(q.index, q, fmt, color=c, label=lab)
             ax.set_yscale("log"); ax.set_xticks(sorted(sub.in_degree.unique()))
             ax.set_xlabel("Parent in-degree $k$")
-            ax.set_title(f"({t}) " + titles.get(lam, f"interaction share {lam:g}"), loc="left")
+            ax.set_title(f"({t}) {title}", loc="left")
         axs[0, 0].set_ylabel("KL divergence (nats)")
-        _legend_top(fig, axs[0, 0], len(estimators), 1.12)
+        _legend_top(fig, axs[0, -1], len(estimators), 1.12)   # last panel has every estimator
         return _save(fig, out_path)
+
+
+def _plain_log_ticks(ax):
+    """Plain-number labels on a log y-axis (0.1, 1, 10 rather than 10^-1 ...). A panel
+    spanning less than about a decade also gets labels at 2 and 5 times each power of
+    ten; otherwise minor ticks stay unlabelled, so no panel gets crowded '4x10^1' labels."""
+    from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
+    lo, hi = ax.get_ylim()
+    fmt = FuncFormatter(lambda v, _: f"{v:g}")
+    ax.yaxis.set_major_formatter(fmt)
+    if np.log10(hi / lo) < 1.3:
+        ax.yaxis.set_minor_locator(LogLocator(base=10, subs=(2, 5)))
+        ax.yaxis.set_minor_formatter(fmt)
+    else:
+        ax.yaxis.set_minor_formatter(NullFormatter())
 
 
 def plot_kl_vs_n(df, estimators, in_degrees=None, out_path=None):
@@ -1317,6 +1350,7 @@ def plot_kl_vs_n(df, estimators, in_degrees=None, out_path=None):
                 ax.plot(q.index, q, fmt, color=c, label=lab)
             ax.set_yscale("log"); ax.set_xticks(sorted(df.sample_size.unique()))
             ax.set_title(f"$k={k}$", loc="left"); ax.set_xlabel("Training rows $N$")
+            _plain_log_ticks(ax)
         axs[0, 0].set_ylabel("KL divergence (nats)")
         _legend_top(fig, axs[0, 0], len(estimators), 1.1)
         return _save(fig, out_path)
@@ -1336,7 +1370,8 @@ def plot_kl_vs_n_by_size(df, estimators, sizes, in_degrees=None, out_path=None):
                     q = sub[sub.estimator == e].groupby("sample_size").kl.mean()
                     ax.plot(q.index, q, fmt, color=c, label=lab)
                 ax.set_yscale("log"); ax.set_xticks(sorted(df.sample_size.unique()))
-                ax.tick_params(labelsize=6)
+                ax.tick_params(which="both", labelsize=6)
+                _plain_log_ticks(ax)
                 if r == 0:
                     ax.set_title(f"$k={k}$", loc="left")
                 if r == len(sizes) - 1:
@@ -1432,7 +1467,7 @@ def with_full_indegree_kl(df):
 
 
 def plot_ratio_vs_rho(df, baselines=("mle", "dirichlet"), estimator="nn_32", n_nodes=None, alpha=0.5,
-                      logy=True, out_path=None):
+                      logy=True, panels=None, by_k=True, out_path=None):
     """KL(baseline) / KL(estimator) vs rows per parent configuration rho = N / r^k:
     one panel per baseline, one line per in-degree k joining its sample sizes,
     every cardinality in df on the same axes (r=2 solid with open markers, r=4
@@ -1441,6 +1476,10 @@ def plot_ratio_vs_rho(df, baselines=("mle", "dirichlet"), estimator="nn_32", n_n
     what it misses. Each point is the mean of the per-DAG ratios, pooled over the
     network sizes in n_nodes (None = every size run at all of df's cardinalities;
     rho is per node and the ratio cancels network size, so pooling is fair).
+    panels : the baselines to draw (default: all of them; the table always has
+    every baseline's ratio, NaN where a baseline wasn't run at that cardinality).
+    by_k=False draws plain points, one marker and colour per cardinality, with
+    no lines and no in-degree colours: one point per (in-degree, N) setting.
     Returns (fig, table of the plotted points)."""
     from matplotlib.lines import Line2D
     baselines = [baselines] if isinstance(baselines, str) else list(baselines)
@@ -1463,11 +1502,20 @@ def plot_ratio_vs_rho(df, baselines=("mle", "dirichlet"), estimator="nn_32", n_n
     k_style = {k: (_PALETTE[i % len(_PALETTE)], mk) for i, ((mk, _), k) in enumerate(zip(_styles(len(ks)), ks))}
     r_style = {r: (ls, filled) for r, ls, filled in zip(cards, ["-", "--", ":", "-."], [False, True, True, True])}
     lab = _est_style(estimator)[2]
+    panels = baselines if panels is None else ([panels] if isinstance(panels, str) else list(panels))
+    plain = {r: (c, mk) for r, c, mk in zip(cards, ["#2563eb", "#d97706", "#16a34a"], ["o", "s", "^"])}
     with plt.rc_context(REPORT_RC):
-        fig, axs = plt.subplots(1, len(baselines), figsize=(DOUBLE_W, 2.2), squeeze=False)
-        for ax, b, t in zip(axs[0], baselines, "abcdefgh"):
+        width = SINGLE_W if len(panels) == 1 else DOUBLE_W
+        fig, axs = plt.subplots(1, len(panels), figsize=(width, 2.2), squeeze=False)
+        for ax, b, t in zip(axs[0], panels, "abcdefgh"):
             for r in cards:
                 ls, filled = r_style[r]
+                if not by_k:
+                    s = g[g.card == r].dropna(subset=[f"ratio_{b}"])
+                    c, mk = plain[r]
+                    ax.plot(s.rho, s[f"ratio_{b}"], ls="none", marker=mk, ms=4, color=c,
+                            mfc=c if filled else "white", label=f"$r={r}$")
+                    continue
                 for k in ks:
                     s = g[(g.card == r) & (g.in_degree == k)]
                     if s.empty:
@@ -1486,7 +1534,12 @@ def plot_ratio_vs_rho(df, baselines=("mle", "dirichlet"), estimator="nn_32", n_n
                 ax.set_ylim(bottom=0)
             ax.set_xlabel(r"Rows per parent configuration $\rho = N/r^{k}$")
             ax.set_ylabel(f"KL({_est_style(b)[2]}) / KL({lab})")
-            ax.set_title(f"({t}) {_est_style(b)[2]} relative to {lab}", loc="left")
+            if len(panels) > 1:
+                ax.set_title(f"({t}) {_est_style(b)[2]} relative to {lab}", loc="left")
+        if not by_k:
+            if len(cards) > 1:   # one cardinality needs no legend
+                axs[0, 0].legend(frameon=False, loc="upper right")
+            return _save(fig, out_path), g
         handles = [Line2D([], [], color=k_style[k][0], marker=k_style[k][1], lw=.9, ms=4, label=f"$k={k}$")
                    for k in ks]
         handles += [Line2D([], [], color="#555", ls=r_style[r][0], marker="o", lw=.9, ms=4,
@@ -1534,14 +1587,56 @@ def real_loglik_panel(ax, s, estimators, err="std", baseline="mle", title=None, 
     return ax
 
 
-def plot_real_mean(res, estimators, err="std", out_path=None):
-    """Held-out log-likelihood vs N, averaged over every discretisation and DAG."""
+def plot_real_mean(res, estimators, err="std", baseline="mle", out_path=None):
+    """Held-out log-likelihood vs N, averaged over every discretisation and DAG.
+    The baseline (plain MLE) lies far below the others, so the y-axis is broken:
+    the top panel shows the other estimators on their own scale (so the gaps
+    between them stay readable) and the bottom panel the baseline on its own."""
     mean = res.groupby(["estimator", "sample_size", "fold"], as_index=False).loglik.mean()
+    if baseline not in estimators:
+        with plt.rc_context(REPORT_RC):
+            fig, ax = plt.subplots(figsize=(SINGLE_W, 2.2))
+            real_loglik_panel(ax, mean, estimators, err=err, baseline=None, ylab=True)
+            _legend_top(fig, ax, 3, 1.13)
+            return _save(fig, out_path)
+    ns = sorted(mean.sample_size.unique())
     with plt.rc_context(REPORT_RC):
-        fig, ax = plt.subplots(figsize=(SINGLE_W, 2.2))
-        real_loglik_panel(ax, mean, estimators, err=err, ylab=True)
-        _legend_top(fig, ax, 3, 1.13)
-        return _save(fig, out_path)
+        fig, (top, bot) = plt.subplots(2, 1, sharex=True, figsize=(SINGLE_W, 3.0),
+                                       gridspec_kw={"height_ratios": [2.3, 1]})
+        lims = {}
+        for i, e in enumerate(estimators):
+            c, fmt, lab = _est_style(e, i)
+            q = mean[mean.estimator == e].groupby("sample_size").loglik.agg(["mean", err])
+            # the baseline goes on the bottom panel only (an empty line on top keeps it in the legend)
+            bar = dict(fmt=fmt, color=c, label=lab, capsize=1.5, elinewidth=.6)
+            if e == baseline:
+                bot.errorbar(q.index, q["mean"], yerr=q[err], **bar)
+                top.plot([], [], fmt, color=c, label=lab)
+            else:
+                top.errorbar(q.index, q["mean"], yerr=q[err], **bar)
+            key = "bot" if e == baseline else "top"
+            lo, hi = (q["mean"] - q[err]).min(), (q["mean"] + q[err]).max()
+            lims[key] = (min(lo, lims.get(key, (lo, hi))[0]), max(hi, lims.get(key, (lo, hi))[1]))
+        for ax, key in ((top, "top"), (bot, "bot")):
+            lo, hi = lims[key]
+            pad = 0.08 * (hi - lo)
+            ax.set_ylim(lo - pad, hi + pad)
+        top.spines["bottom"].set_visible(False)
+        top.tick_params(axis="x", bottom=False, labelbottom=False)
+        bot.spines["top"].set_visible(False)
+        # break marks on the left axis
+        for ax, y in ((top, 0), (bot, 1)):
+            ax.plot([-0.025, 0.025], [y - 0.02, y + 0.02], transform=ax.transAxes,
+                    color="k", lw=.8, clip_on=False)
+        bot.set_xscale("log"); bot.set_xlim(ns[0] / 1.5, ns[-1] * 1.6)
+        bot.set_xticks(ns); bot.set_xticklabels([_n_label(n) for n in ns]); bot.minorticks_off()
+        bot.set_xlabel("Training rows $N$")
+        fig.supylabel("Held-out log-likelihood (nats/row)", fontsize=plt.rcParams["axes.labelsize"])
+        _legend_top(fig, top, 3, 1.10)
+        fig.tight_layout(h_pad=0.4)
+        if out_path:
+            fig.savefig(out_path, dpi=REPORT_DPI)
+        return fig
 
 
 DIAG_METRICS = [("diag_auroc", "AUROC", "higher"), ("diag_logloss", "Log-loss (nats)", "lower")]
@@ -1661,3 +1756,52 @@ def plot_real_timing(timing, estimators, panels, out_path=None):
         axs[0, 0].set_ylabel("Fit time (s, serial)")
         _legend_top(fig, axs[0, 0], len(estimators), 1.1)
         return _save(fig, out_path)
+
+
+def _tex_label(name):
+    """An estimator's report label, with code names (nn_32) set in typewriter."""
+    lab = _est_style(name)[2]
+    return f"\\texttt{{{lab.replace('_', chr(92) + '_')}}}" if "_" in lab else lab
+
+
+def _fmt_mean_err(m, e, decimals=None):
+    """'$m \\pm e$' with both to the same decimals (by default from m's magnitude)."""
+    if pd.isna(m):
+        return "--"
+    d = decimals if decimals is not None else (1 if abs(m) >= 10 else 2 if abs(m) >= 1 else 3)
+    return f"${m:.{d}f} \\pm {e:.{d}f}$"
+
+
+def mean_err_table(df, index, estimators, value="kl", err="se", decimals=None, index_labels=None,
+                   out_path=None):
+    """LaTeX tabular (booktabs) of mean +- error per row of `index` and estimator column.
+    df: one row per fit; each (index, estimator) group is averaged over its fits
+    (e.g. the DAGs or folds). err: "se" (standard error of the mean) or "std".
+    Repeated leading index values are left blank; make an index column an ordered
+    Categorical to set its row order. Returns the tabular as a string
+    and writes it to out_path, for \\input in the report."""
+    s = (df[df.estimator.isin(estimators)].groupby(list(index) + ["estimator"], observed=True)[value]
+         .agg(["mean", "std", "size"]))
+    s["err"] = s["std"] / np.sqrt(s["size"]) if err == "se" else s["std"]
+    cells = s.apply(lambda r: _fmt_mean_err(r["mean"], r["err"], decimals), axis=1).unstack("estimator")
+    cells = cells.reindex(columns=[e for e in estimators if e in cells.columns])
+    heads = list(index_labels or index) + [_tex_label(e) for e in cells.columns]
+    lines = ["\\begin{tabular}{@{}" + "l" * len(index) + "r" * cells.shape[1] + "@{}}", "\\toprule",
+             " & ".join(heads) + " \\\\", "\\midrule"]
+    prev = None
+    for key, row in cells.iterrows():
+        key = key if isinstance(key, tuple) else (key,)
+        shown = [("" if prev is not None and all(key[j] == prev[j] for j in range(i + 1)) else
+                  (f"{v:,}".replace(",", "\\,") if isinstance(v, (int, np.integer)) else str(v)))
+                 for i, v in enumerate(key)]
+        if prev is not None and key[0] != prev[0]:
+            lines.append("\\addlinespace")
+        lines.append(" & ".join(shown + list(row.fillna("--"))) + " \\\\")
+        prev = key
+    lines += ["\\bottomrule", "\\end{tabular}"]
+    tex = "\n".join(lines) + "\n"
+    if out_path:
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        with open(out_path, "w") as f:
+            f.write(tex)
+    return tex
