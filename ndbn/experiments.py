@@ -268,13 +268,12 @@ def model_stats(model, n_epochs):
 
 
 def evaluate(model, true_model, test_data, cards, n_epochs):
-    """KL vs ground truth plus size / early-stopping stats -> (kl, se, extra).
-    extra["node_kl"] is JSON: node -> [its conditional KL term, number of parents]."""
+    """KL vs ground truth plus size / early-stopping stats -> (kl, se, extra)."""
     if isinstance(model, NeuralCPDs):
-        kl, se, nodes = kl_nn(true_model, model, test_data, cards, return_nodes=True)
+        kl, se = kl_nn(true_model, model, test_data, cards)
     else:
-        kl, se, nodes = kl_mle(true_model, model, test_data, return_nodes=True)
-    return kl, se, {**model_stats(model, n_epochs), "node_kl": json.dumps(nodes)}
+        kl, se = kl_mle(true_model, model, test_data)
+    return kl, se, model_stats(model, n_epochs)
 
 
 def _run_dag_job(job, estimators, sample_sizes, card, val_frac, n_test, n_epochs,

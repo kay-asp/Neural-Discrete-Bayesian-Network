@@ -44,11 +44,6 @@ the figures from the saved CSVs.
 | 3 | Main synthetic grid for r = 2 and r = 4 (resumable); report figures | `results-synthetic/results.csv`, `figs/{mle_fails,arms,kl_vs_N,size_alpha}_c{2,4}.png`, `figs/rho.png`, `figs/alpha_check.png` (from `alphas.csv`), `report/tables/synthetic_kl_r2.tex` |
 | 4 | Real data: 3-fold CV over 3 discretisations × 3 expert DAGs × 4 sample sizes (resumable); per-fold tuning (`RUN_TUNING`); diagnostic accuracy (`RUN_DIAGNOSIS`); report figures | `results-realdata/`, `figs/real_*.png`, `figs/dag_moderate.png`, `report/tables/real_loglik.tex` |
 
-`overnight.py` runs the follow-up experiments of notebook 3 in one go, one after another: the structured ground
-truth, the refit of the 11 Oct rows, per-node KL terms for the ρ figure (r=2, then optionally r=4) and a small serial
-timing run. It logs to `logs/`, backs up any file it changes, and `--smoke --out <folder>` runs a tiny version
-without touching the results.
-
 The full synthetic grid is the expensive part: about 120 core-hours for every network, about 32 for `nn_32`
 alone. Tabular fits at r = 4 with in-degree 8–10 build very large tables, so run them with few workers
 (`n_jobs` ≤ 2 on a 16 GB machine). Every random step is seeded from its configuration

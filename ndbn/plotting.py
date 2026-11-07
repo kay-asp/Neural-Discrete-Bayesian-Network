@@ -1455,17 +1455,6 @@ def plot_size_alpha(df, estimators, out_path=None):
         return _save(fig, out_path)
 
 
-def with_full_indegree_kl(df):
-    """Rows recorded with node_kl, with kl replaced by the sum of the conditional
-    KL terms of the nodes that have exactly in_degree parents. For those nodes
-    rho = N / r^k is exact; the network total also mixes in the first k nodes of
-    each DAG, which have fewer parents."""
-    out = df[df["node_kl"].notna()].copy()
-    out["kl"] = [sum(term for term, n_pa in json.loads(s).values() if n_pa == k)
-                 for s, k in zip(out["node_kl"], out["in_degree"])]
-    return out
-
-
 def plot_ratio_vs_rho(df, baselines=("mle", "dirichlet"), estimator="nn_32", n_nodes=None, alpha=0.5,
                       logy=True, panels=None, by_k=True, out_path=None):
     """KL(baseline) / KL(estimator) vs rows per parent configuration rho = N / r^k:
